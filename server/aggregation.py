@@ -412,15 +412,15 @@ def aggregate(
         return median(client_weights, client_data_sizes)
 
     if aggregation_method == "krum":
-        num_byzantine = max(1, len(client_weights) // 5)
+        num_byzantine = kwargs.get("num_byzantine", max(1, len(client_weights) // 5))
         return krum(client_weights, client_data_sizes, num_byzantine)
 
     if aggregation_method == "multi_krum":
-        num_byzantine = max(1, len(client_weights) // 5)
+        num_byzantine = kwargs.get("num_byzantine", max(1, len(client_weights) // 5))
         return multi_krum(client_weights, client_data_sizes, num_byzantine)
 
     if aggregation_method == "bulyan":
-        num_byzantine = max(1, len(client_weights) // 5)
+        num_byzantine = kwargs.get("num_byzantine", max(1, len(client_weights) // 5))
         return bulyan(client_weights, client_data_sizes, num_byzantine)
 
     if aggregation_method == "fltrust":

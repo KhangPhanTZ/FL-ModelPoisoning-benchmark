@@ -16,7 +16,9 @@ class FederatedClient:
         batch_size: int = 32,
         learning_rate: float = 0.01,
         is_malicious: bool = False,
-        attack_type: str = "none"
+        attack_type: str = "none",
+        poison_ratio: float = 0.5,
+        target_class: int = 7
     ):
         self.client_id = client_id
         self.dataset = dataset
@@ -25,6 +27,8 @@ class FederatedClient:
         self.learning_rate = learning_rate
         self.is_malicious = is_malicious
         self.attack_type = attack_type
+        self.poison_ratio = poison_ratio
+        self.target_class = target_class
 
         self.data_loader = DataLoader(
             dataset,
@@ -52,6 +56,18 @@ class FederatedClient:
         for epoch in range(local_epochs):
             for batch_idx, (data, target) in enumerate(self.data_loader):
                 data, target = data.to(self.device), target.to(self.device)
+
+                # Inject backdoor ONLY for model_replacement attack
+                # LIE and Min-Max are Byzantine weight attacks — they do not
+                # use data poisoning.  Backdoor training is specific to the
+                # Model Replacement attack (Bagdasaryan et al., 2020).
+                if self.is_malicious and self.attack_type == "model_replacement":
+                    from data.backdoor import create_poisoned_batch
+                    data, target = create_poisoned_batch(
+                        data, target,
+                        poison_ratio=self.poison_ratio,
+                        target_class=self.target_class
+                    )
 
                 optimizer.zero_grad()
                 output = local_model(data)

@@ -65,14 +65,19 @@ class FederatedServer:
                 self.attack_type,
                 z=self.attack_z,
                 global_weights=global_weights,
-                num_clients=len(selected_clients)
+                client_data_sizes=client_data_sizes
             )
+
+        # Pass actual malicious count so robust aggregators (Krum, Bulyan)
+        # use the correct f parameter instead of a heuristic.
+        num_byzantine = len(malicious_indices)
 
         aggregated_weights = aggregate(
             client_weights,
             client_data_sizes,
             self.aggregation_method,
-            global_weights=global_weights
+            global_weights=global_weights,
+            num_byzantine=num_byzantine
         )
 
         self.global_model.load_state_dict(aggregated_weights)
@@ -103,50 +108,57 @@ class FederatedServer:
     def compute_asr(
         self,
         test_loader: DataLoader,
-        source_class: int = 1,
         target_class: int = 7
     ) -> float:
         """
-        Compute Attack Success Rate (ASR).
+        Compute Attack Success Rate (ASR) using triggered samples.
 
-        ASR measures the percentage of samples from source_class that are
-        misclassified as target_class. High ASR indicates successful attack.
+        ASR = (# non-target triggered samples classified as target) /
+              (# non-target triggered samples)
+
+        Samples whose true label is already the target class are excluded
+        from both numerator and denominator to avoid inflating ASR.
 
         Args:
             test_loader: Test data loader
-            source_class: Original class label (default: 1)
-            target_class: Target class for misclassification (default: 7)
+            target_class: Target class for backdoor attack (default: 7)
 
         Returns:
             ASR percentage (0-100)
         """
+        from data.backdoor import add_trigger
+
         self.global_model.eval()
-        source_samples = 0
-        misclassified_to_target = 0
+        total_samples = 0
+        successful_attacks = 0
 
         with torch.no_grad():
             for data, target in test_loader:
-                data, target = data.to(self.device), target.to(self.device)
+                data = data.to(self.device)
+                target = target.to(self.device)
 
-                # Only consider samples from source class
-                source_mask = target == source_class
-                if source_mask.sum() == 0:
+                # Exclude samples already belonging to the target class
+                mask = target != target_class
+                if mask.sum() == 0:
                     continue
 
-                source_data = data[source_mask]
-                source_samples += source_mask.sum().item()
+                filtered_data = data[mask]
 
-                # Get predictions
-                output = self.global_model(source_data)
+                # Apply trigger to filtered test samples
+                triggered_data = add_trigger(filtered_data)
+
+                # Get predictions on triggered samples
+                output = self.global_model(triggered_data)
                 pred = output.argmax(dim=1)
 
-                # Count how many are misclassified to target class
-                misclassified_to_target += (pred == target_class).sum().item()
+                # Count how many triggered samples are classified as target class
+                successful_attacks += (pred == target_class).sum().item()
+                total_samples += filtered_data.size(0)
 
-        if source_samples == 0:
+        if total_samples == 0:
             return 0.0
 
-        asr = 100.0 * misclassified_to_target / source_samples
+        asr = 100.0 * successful_attacks / total_samples
         return asr
 
     def get_global_model(self) -> nn.Module:
