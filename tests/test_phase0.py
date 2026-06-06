@@ -7,6 +7,11 @@ or simply:
     python tests/test_phase0.py
 """
 
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import torch
 
 from server.attacks import apply_attack

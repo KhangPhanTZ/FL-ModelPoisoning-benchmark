@@ -28,10 +28,15 @@ from typing import List, Tuple, Dict
 
 
 # Experiment configurations
-AGGREGATIONS = ["mean", "median", "krum"]
+DATASETS = ["mnist", "fashion_mnist"]
+AGGREGATIONS = ["mean", "median", "krum", "fltrust"]
 ATTACKS = ["lie", "minmax", "model_replacement"]
-PARTITIONS = ["iid", "noniid"]
 MALICIOUS_COUNTS = [2, 4, 6]
+SEEDS = [42]  # add more seeds (e.g. [42, 1, 7]) for mean +/- std reporting
+
+# Non-IID heterogeneity sweep (the key variable for RQ2). IID is run as a
+# separate single point with no alpha.
+NONIID_ALPHAS = [0.1, 0.5]
 
 # Attack strength parameters (z values)
 ATTACK_Z = {
@@ -41,53 +46,56 @@ ATTACK_Z = {
     "model_replacement": 1.0,
 }
 
-# Non-IID alpha parameter
-NONIID_ALPHA = 0.5
+
+def _partition_settings():
+    """Yield (partition, alpha) pairs: IID (no alpha) + each non-IID alpha."""
+    yield ("iid", None)
+    for alpha in NONIID_ALPHAS:
+        yield ("noniid", alpha)
 
 
 def generate_all_configs() -> List[Dict]:
     """
     Generate all experiment configurations.
 
-    This includes the attack x malicious grid plus a clean ``none`` baseline
-    (malicious=0) for every aggregation x partition, which is required to
-    quantify the accuracy drop an attack causes relative to no attack.
+    Grid = datasets x aggregations x seeds x partition-settings, and for each:
+      - a clean ``none`` baseline (malicious=0) to measure attack-induced drop;
+      - the attack x malicious grid.
+
+    This can be large; use --dry-run to preview the count and trim the lists
+    (DATASETS / AGGREGATIONS / NONIID_ALPHAS / SEEDS) as needed.
     """
     configs = []
-
-    # Clean baselines: no attack, no malicious clients.
-    for agg, partition in itertools.product(AGGREGATIONS, PARTITIONS):
-        config = {
-            "aggregation": agg,
-            "attack": "none",
-            "partition": partition,
-            "malicious": 0,
-            "z": ATTACK_Z["none"],
-        }
-        if partition == "noniid":
-            config["alpha"] = NONIID_ALPHA
-        configs.append(config)
-
-    # Attack grid.
-    for agg, attack, partition, mal in itertools.product(
-        AGGREGATIONS, ATTACKS, PARTITIONS, MALICIOUS_COUNTS
-    ):
-        config = {
-            "aggregation": agg,
-            "attack": attack,
-            "partition": partition,
-            "malicious": mal,
-            "z": ATTACK_Z[attack],
-        }
-        if partition == "noniid":
-            config["alpha"] = NONIID_ALPHA
-        configs.append(config)
+    for dataset, agg, seed in itertools.product(DATASETS, AGGREGATIONS, SEEDS):
+        for partition, alpha in _partition_settings():
+            base = {
+                "dataset": dataset,
+                "aggregation": agg,
+                "partition": partition,
+                "seed": seed,
+                "alpha": alpha,
+            }
+            # Clean baseline.
+            configs.append({**base, "attack": "none", "malicious": 0,
+                            "z": ATTACK_Z["none"]})
+            # Attack grid.
+            for attack, mal in itertools.product(ATTACKS, MALICIOUS_COUNTS):
+                configs.append({**base, "attack": attack, "malicious": mal,
+                                "z": ATTACK_Z[attack]})
     return configs
 
 
 def get_result_filename(config: Dict) -> str:
-    """Generate expected result filename for a config."""
-    return f"{config['aggregation']}_{config['attack']}_{config['partition']}_m{config['malicious']}.csv"
+    """Expected result filename, matching utils.logger.FLLogger naming."""
+    parts = [config["dataset"], config["aggregation"], config["attack"],
+             config["partition"]]
+    base = "_".join(parts)
+    if config["partition"] == "noniid" and config.get("alpha") is not None:
+        base += f"_a{config['alpha']}"
+    base += f"_m{config['malicious']}"
+    if config.get("seed") is not None:
+        base += f"_s{config['seed']}"
+    return f"{base}.csv"
 
 
 def get_completed_configs(results_dir: Path) -> set:
@@ -111,20 +119,27 @@ def run_experiment(config: Dict, results_dir: Path) -> Tuple[bool, str]:
     """
     cmd = [
         sys.executable, "main.py",
+        "--dataset", config["dataset"],
         "--aggregation", config["aggregation"],
         "--attack", config["attack"],
         "--partition", config["partition"],
         "--malicious", str(config["malicious"]),
         "--z", str(config["z"]),
+        "--seed", str(config["seed"]),
         "--rounds", "50",
         "--num_clients", "20",
         "--clients_per_round", "10",
     ]
 
-    if config.get("alpha"):
+    if config["partition"] == "noniid" and config.get("alpha") is not None:
         cmd.extend(["--alpha", str(config["alpha"])])
 
-    config_str = f"{config['aggregation']}/{config['attack']}/{config['partition']}/m{config['malicious']}"
+    config_str = (
+        f"{config['dataset']}/{config['aggregation']}/{config['attack']}/"
+        f"{config['partition']}"
+        + (f"(a={config['alpha']})" if config.get("alpha") is not None else "")
+        + f"/m{config['malicious']}/s{config['seed']}"
+    )
 
     try:
         print(f"\n{'='*60}")
@@ -217,8 +232,7 @@ def main():
     if args.dry_run:
         print("\n[DRY RUN] Would run the following experiments:")
         for i, config in enumerate(pending_configs, 1):
-            cfg_str = f"{config['aggregation']}/{config['attack']}/{config['partition']}/m{config['malicious']}"
-            print(f"  {i:2d}. {cfg_str}")
+            print(f"  {i:3d}. {get_result_filename(config)}")
         return 0
 
     if not pending_configs:

@@ -22,6 +22,9 @@ class FLLogger:
         malicious: int,
         results_dir: str = "results",
         skip_existing: bool = False,
+        dataset: str = "mnist",
+        alpha: float = None,
+        seed: int = None,
     ):
         """
         Initialize the logger.
@@ -33,6 +36,9 @@ class FLLogger:
             malicious: Number of malicious clients
             results_dir: Directory to save results
             skip_existing: If True, raise SkipExperiment if file exists
+            dataset: Dataset name (encoded in the filename)
+            alpha: Dirichlet alpha (encoded only for non-IID partitions)
+            seed: Random seed (encoded when provided, to separate repeated runs)
         """
         self.aggregation = aggregation
         self.attack = attack
@@ -40,6 +46,9 @@ class FLLogger:
         self.malicious = malicious
         self.results_dir = Path(results_dir)
         self.skip_existing = skip_existing
+        self.dataset = dataset
+        self.alpha = alpha
+        self.seed = seed
 
         # Create results directory if it doesn't exist
         self.results_dir.mkdir(parents=True, exist_ok=True)
@@ -60,8 +69,19 @@ class FLLogger:
         self._write_header()
 
     def _generate_filename(self) -> str:
-        """Generate descriptive filename."""
-        base = f"{self.aggregation}_{self.attack}_{self.partition}_m{self.malicious}"
+        """
+        Generate a descriptive filename.
+
+        Scheme: {dataset}_{aggregation}_{attack}_{partition}[_a{alpha}]_m{malicious}[_s{seed}].csv
+        Alpha is included only for non-IID partitions; seed only when provided.
+        """
+        parts = [self.dataset, self.aggregation, self.attack, self.partition]
+        base = "_".join(parts)
+        if self.partition == "noniid" and self.alpha is not None:
+            base += f"_a{self.alpha}"
+        base += f"_m{self.malicious}"
+        if self.seed is not None:
+            base += f"_s{self.seed}"
         return f"{base}.csv"
 
     def _resolve_unique_path(self, filename: str) -> Path:
@@ -167,11 +187,15 @@ def create_logger(args, skip_existing: bool = False) -> FLLogger:
         partition=args.partition,
         malicious=args.malicious,
         results_dir="results",
-        skip_existing=skip_existing
+        skip_existing=skip_existing,
+        dataset=getattr(args, "dataset", "mnist"),
+        alpha=getattr(args, "alpha", None),
+        seed=getattr(args, "seed", None),
     )
 
     # Log configuration
     config = {
+        "dataset": getattr(args, "dataset", "mnist"),
         "aggregation": args.aggregation,
         "attack": args.attack,
         "partition": args.partition,

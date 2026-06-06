@@ -14,7 +14,8 @@ import torch
 from tqdm import tqdm
 
 from models.lenet import get_model
-from data.mnist import load_mnist, partition_data, get_test_loader, print_partition_stats
+from data.datasets import load_dataset, build_root_loader, available_datasets
+from data.mnist import partition_data, get_test_loader, print_partition_stats
 from client.client import FederatedClient
 from server.server import FederatedServer
 from utils.logger import create_logger
@@ -101,6 +102,21 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--dataset",
+        type=str,
+        default="mnist",
+        choices=available_datasets(),
+        help="Dataset (default: mnist)"
+    )
+
+    parser.add_argument(
+        "--root_size",
+        type=int,
+        default=100,
+        help="Size of the clean root dataset used by FLTrust (default: 100)"
+    )
+
+    parser.add_argument(
         "--local_epochs",
         type=int,
         default=1,
@@ -146,6 +162,7 @@ def main():
     print("=" * 60)
     print("Federated Learning Configuration")
     print("=" * 60)
+    print(f"Dataset:          {args.dataset}")
     print(f"Model:            {args.model}")
     print(f"Aggregation:      {args.aggregation}")
     print(f"Attack:           {args.attack}" + (f" (z={args.z})" if args.attack != "none" else ""))
@@ -165,8 +182,8 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    print("\nLoading MNIST dataset...")
-    train_dataset, test_dataset = load_mnist(data_dir="./data")
+    print(f"\nLoading {args.dataset} dataset...")
+    train_dataset, test_dataset = load_dataset(args.dataset, data_dir="./data")
     print(f"Training samples: {len(train_dataset)}")
     print(f"Test samples: {len(test_dataset)}")
 
@@ -175,6 +192,17 @@ def main():
 
     if args.partition == "noniid":
         print_partition_stats(client_datasets, train_dataset)
+
+    # FLTrust needs a trusted clean root set held by the server.
+    root_loader = None
+    if args.aggregation == "fltrust":
+        root_loader = build_root_loader(
+            train_dataset,
+            root_size=args.root_size,
+            batch_size=args.batch_size,
+            seed=args.seed,
+        )
+        print(f"FLTrust root dataset: {args.root_size} clean samples")
 
     print("Creating clients...")
     clients = []
@@ -200,7 +228,9 @@ def main():
         device=device,
         aggregation_method=args.aggregation,
         attack_type=args.attack,
-        attack_z=args.z
+        attack_z=args.z,
+        root_loader=root_loader,
+        learning_rate=args.lr,
     )
 
     test_loader = get_test_loader(test_dataset)

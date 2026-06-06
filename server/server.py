@@ -20,7 +20,9 @@ class FederatedServer:
         device: torch.device,
         aggregation_method: str = "mean",
         attack_type: str = "none",
-        attack_z: float = 1.0
+        attack_z: float = 1.0,
+        root_loader: DataLoader = None,
+        learning_rate: float = 0.01,
     ):
         self.global_model = global_model.to(device)
         self.clients = clients
@@ -28,10 +30,45 @@ class FederatedServer:
         self.aggregation_method = aggregation_method
         self.attack_type = attack_type
         self.attack_z = attack_z
+        # Trusted clean root set used by FLTrust to compute a reference update.
+        self.root_loader = root_loader
+        self.learning_rate = learning_rate
 
     def select_clients(self, num_clients: int) -> List[FederatedClient]:
         """Randomly select clients for a training round."""
         return random.sample(self.clients, min(num_clients, len(self.clients)))
+
+    def _compute_server_update(self, global_weights, local_epochs: int):
+        """
+        Train the global model on the trusted root set and return its update.
+
+        This is the trusted reference direction FLTrust scores clients against.
+        Returns None when no root loader is configured.
+        """
+        if self.root_loader is None:
+            return None
+
+        server_model = copy.deepcopy(self.global_model).to(self.device)
+        server_model.train()
+        optimizer = torch.optim.SGD(
+            server_model.parameters(), lr=self.learning_rate, momentum=0.9
+        )
+        criterion = nn.CrossEntropyLoss()
+
+        for _ in range(local_epochs):
+            for data, target in self.root_loader:
+                data, target = data.to(self.device), target.to(self.device)
+                optimizer.zero_grad()
+                loss = criterion(server_model(data), target)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(server_model.parameters(), max_norm=10.0)
+                optimizer.step()
+
+        server_state = {
+            name: param.detach().cpu().float().clone()
+            for name, param in server_model.state_dict().items()
+        }
+        return {key: server_state[key] - global_weights[key] for key in global_weights}
 
     def train_round(
         self,
@@ -79,6 +116,11 @@ class FederatedServer:
                 client_data_sizes=client_data_sizes,
             )
 
+        # FLTrust needs a trusted server update computed on the clean root set.
+        server_update = None
+        if self.aggregation_method == "fltrust":
+            server_update = self._compute_server_update(global_weights, local_epochs)
+
         # Pass the actual malicious count so robust aggregators (Krum, Bulyan)
         # use the correct f parameter instead of a heuristic.
         aggregated_update, info = aggregate(
@@ -86,6 +128,7 @@ class FederatedServer:
             client_data_sizes,
             self.aggregation_method,
             num_byzantine=len(malicious_indices),
+            server_update=server_update,
         )
 
         # Reconstruct the new global model: w_global + Delta.

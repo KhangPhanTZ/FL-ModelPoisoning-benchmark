@@ -66,15 +66,18 @@ python run_experiments.py
 
 | Argument | Options | Description |
 |----------|---------|-------------|
+| `--dataset` | `mnist`, `fashion_mnist` | Dataset (default: mnist) |
 | `--aggregation` | `mean`, `median`, `krum`, `multi_krum`, `bulyan`, `fltrust` | Aggregation method |
 | `--attack` | `none`, `lie`, `minmax`, `model_replacement` | Attack type |
 | `--partition` | `iid`, `noniid` | Data distribution |
 | `--malicious` | Integer | Number of malicious clients |
 | `--z` | Float | Attack strength parameter |
 | `--alpha` | Float | Dirichlet alpha for non-IID (default: 0.5) |
+| `--root_size` | Integer | Clean root-set size for FLTrust (default: 100) |
 | `--rounds` | Integer | Number of FL rounds (default: 50) |
 | `--num_clients` | Integer | Total clients (default: 20) |
 | `--clients_per_round` | Integer | Clients sampled per round (default: 10) |
+| `--seed` | Integer | Random seed (default: 42) |
 
 ## Attacks
 
@@ -96,12 +99,18 @@ Scales malicious updates to dominate after FedAvg aggregation.
 | **Krum** | Selects update closest to others |
 | **Multi-Krum** | Selects k closest updates and averages |
 | **Bulyan** | Krum selection + trimmed mean |
-| **FLTrust** | Cosine similarity-based trust weighting |
+| **FLTrust** | Cosine-similarity trust weighting against a clean **server root dataset** (set via `--root_size`); falls back to the coordinate-wise median reference only when no root set is provided |
+
+## Datasets
+
+`mnist` and `fashion_mnist` are supported (both 1x28x28, 10 classes, so the same
+LeNet works for either). Select with `--dataset`.
 
 ## Results
 
 Experiment results are saved to `results/` as CSV files:
-- Format: `{aggregation}_{attack}_{partition}_m{malicious}.csv`
+- Format: `{dataset}_{aggregation}_{attack}_{partition}[_a{alpha}]_m{malicious}[_s{seed}].csv`
+  (`a{alpha}` only for non-IID; `s{seed}` when a seed is recorded)
 - Columns: `round`, `loss`, `accuracy`, `asr`, `evasion_rate`, `timestamp`
 
 ## Metrics
@@ -124,7 +133,17 @@ defenses measure norms and cosine similarities (on gradients, not raw weights).
 
 ## Configuration Matrix
 
-The benchmark runs 54 configurations:
-- 3 aggregations × 3 attacks × 2 partitions × 3 malicious counts
+`run_experiments.py` sweeps: datasets x aggregations x seeds x partition
+settings (IID + a non-IID **alpha sweep**), and for each it runs a clean `none`
+baseline plus the attack x malicious grid. The lists (`DATASETS`,
+`AGGREGATIONS`, `NONIID_ALPHAS`, `SEEDS`, `MALICIOUS_COUNTS`) are configurable
+at the top of the file - use `--dry-run` to preview the count and trim before
+launching.
+
+## Testing
+
+```bash
+python3 -m pytest tests/ -v        # or: PYTHONPATH=. python3 tests/test_phase0.py
+```
 
 
