@@ -58,15 +58,23 @@ def test_adaptive_keeps_base_when_outlier_is_filtered():
 
 
 def test_adaptive_result_is_accepted_at_boundary():
-    """After adaptive scaling against multi_krum, the malicious update that can
-    be accepted ends up accepted (operating at the boundary)."""
-    updates = [_u(1.0), _u(1.0), _u(1.0), _u(1.0), _u(1.05)]
+    """Adaptive scaling against multi_krum should push the malicious update up
+    to the acceptance boundary and leave it accepted (without over-shooting).
+
+    Setup: a tight cluster at 1.0 that includes the malicious client (idx 0),
+    plus one benign outlier at 3.0 which multi_krum drops first. As the
+    malicious update is scaled up it eventually becomes the outlier, so the
+    acceptance boundary lies strictly inside (1, max_scale).
+    """
+    updates = [_u(1.0), _u(1.0), _u(1.0), _u(1.0), _u(1.0), _u(3.0)]
     srv = _server("multi_krum", max_scale=5.0)
-    srv._apply_adaptive_scaling(updates, [4], [1] * 5, server_update=None)
+    srv._apply_adaptive_scaling(updates, [0], [1] * 6, server_update=None)
 
-    _, info = aggregate(updates, [1] * 5, "multi_krum", num_byzantine=1)
-    assert info.selected[4] is True
-
+    _, info = aggregate(updates, [1] * 6, "multi_krum", num_byzantine=1)
+    assert info.selected[0] is True
+    # Scaled up beyond the base (1x) but not to the cap (a real boundary).
+    val = updates[0]["w"][0].item()
+    assert 1.0 < val < 5.0, val
 
 def test_analyze_collects_final_metrics():
     with tempfile.TemporaryDirectory() as d:
