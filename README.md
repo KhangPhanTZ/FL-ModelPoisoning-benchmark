@@ -102,12 +102,25 @@ Scales malicious updates to dominate after FedAvg aggregation.
 
 Experiment results are saved to `results/` as CSV files:
 - Format: `{aggregation}_{attack}_{partition}_m{malicious}.csv`
-- Columns: `round`, `loss`, `accuracy`, `asr`
+- Columns: `round`, `loss`, `accuracy`, `asr`, `evasion_rate`, `timestamp`
 
 ## Metrics
 
-- **Accuracy**: Model accuracy on test set
-- **ASR (Attack Success Rate)**: Measures attack effectiveness
+- **Accuracy**: Model accuracy on the test set (main-task performance).
+- **ASR (Attack Success Rate)**: Backdoor effectiveness. Only meaningful for the
+  backdoor attack (`model_replacement`); untargeted attacks (LIE / Min-Max) are
+  assessed by the accuracy drop versus the clean `none` baseline.
+- **Evasion Rate**: Fraction (%) of malicious updates accepted (not filtered) by
+  the defense each round. For coordinate-wise defenses (Median) there is no
+  per-client rejection, so this is reported as 100%.
+
+## Implementation notes
+
+Attacks and aggregation operate in **update space** (`u_i = w_local_i - w_global`):
+the server forms each client's update, the attack perturbs the malicious
+updates, the aggregator returns an aggregated update `Delta`, and the new global
+model is reconstructed as `w_global + Delta`. This matches how Byzantine-robust
+defenses measure norms and cosine similarities (on gradients, not raw weights).
 
 ## Configuration Matrix
 

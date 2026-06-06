@@ -93,6 +93,7 @@ class FLLogger:
                 "loss",
                 "accuracy",
                 "asr",
+                "evasion_rate",
                 "timestamp"
             ])
 
@@ -101,7 +102,8 @@ class FLLogger:
         round_num: int,
         loss: float,
         accuracy: float,
-        asr: Optional[float] = None
+        asr: Optional[float] = None,
+        evasion_rate: Optional[float] = None
     ):
         """
         Log a single round's metrics (streaming write).
@@ -111,6 +113,8 @@ class FLLogger:
             loss: Test loss
             accuracy: Test accuracy (%)
             asr: Attack success rate (%), optional
+            evasion_rate: Fraction (%) of malicious updates accepted by the
+                defense this round, optional
         """
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -121,6 +125,7 @@ class FLLogger:
                 f"{loss:.6f}",
                 f"{accuracy:.4f}",
                 f"{asr:.4f}" if asr is not None else "",
+                f"{evasion_rate:.4f}" if evasion_rate is not None else "",
                 timestamp
             ])
 

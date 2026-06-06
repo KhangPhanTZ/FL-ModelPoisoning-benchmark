@@ -35,6 +35,7 @@ MALICIOUS_COUNTS = [2, 4, 6]
 
 # Attack strength parameters (z values)
 ATTACK_Z = {
+    "none": 0.0,
     "lie": 3.0,
     "minmax": 15.0,
     "model_replacement": 1.0,
@@ -45,8 +46,29 @@ NONIID_ALPHA = 0.5
 
 
 def generate_all_configs() -> List[Dict]:
-    """Generate all 54 experiment configurations."""
+    """
+    Generate all experiment configurations.
+
+    This includes the attack x malicious grid plus a clean ``none`` baseline
+    (malicious=0) for every aggregation x partition, which is required to
+    quantify the accuracy drop an attack causes relative to no attack.
+    """
     configs = []
+
+    # Clean baselines: no attack, no malicious clients.
+    for agg, partition in itertools.product(AGGREGATIONS, PARTITIONS):
+        config = {
+            "aggregation": agg,
+            "attack": "none",
+            "partition": partition,
+            "malicious": 0,
+            "z": ATTACK_Z["none"],
+        }
+        if partition == "noniid":
+            config["alpha"] = NONIID_ALPHA
+        configs.append(config)
+
+    # Attack grid.
     for agg, attack, partition, mal in itertools.product(
         AGGREGATIONS, ATTACKS, PARTITIONS, MALICIOUS_COUNTS
     ):
