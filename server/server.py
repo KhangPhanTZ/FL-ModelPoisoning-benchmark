@@ -25,6 +25,7 @@ class FederatedServer:
         learning_rate: float = 0.01,
         attack_tau: float = 0.5,
         attack_mask_ratio: float = 0.7,
+        attack_adaptive_max_scale: float = 5.0,
     ):
         self.global_model = global_model.to(device)
         self.clients = clients
@@ -35,6 +36,7 @@ class FederatedServer:
         # GeoTox stealth knobs.
         self.attack_tau = attack_tau
         self.attack_mask_ratio = attack_mask_ratio
+        self.attack_adaptive_max_scale = attack_adaptive_max_scale
         # Trusted clean root set used by FLTrust to compute a reference update.
         self.root_loader = root_loader
         self.learning_rate = learning_rate
@@ -111,12 +113,16 @@ class FederatedServer:
             if client.is_malicious:
                 malicious_indices.append(idx)
 
+        # GeoTox-Adaptive reuses the GeoTox shaping, then (below) tunes its
+        # magnitude against the known defense. Map it to the base attack here.
+        base_attack = "geotox" if self.attack_type == "geotox_adaptive" else self.attack_type
+
         # Apply the attack to the malicious clients' updates.
-        if malicious_indices and self.attack_type != "none":
+        if malicious_indices and base_attack != "none":
             client_updates = apply_attack(
                 client_updates,
                 malicious_indices,
-                self.attack_type,
+                base_attack,
                 z=self.attack_z,
                 client_data_sizes=client_data_sizes,
                 tau=self.attack_tau,
@@ -127,6 +133,13 @@ class FederatedServer:
         server_update = None
         if self.aggregation_method == "fltrust":
             server_update = self._compute_server_update(global_weights, local_epochs)
+
+        # GeoTox-Adaptive (white-box, omniscient upper bound): scale the shaped
+        # malicious update to the defense's acceptance boundary.
+        if self.attack_type == "geotox_adaptive" and malicious_indices:
+            client_updates = self._apply_adaptive_scaling(
+                client_updates, malicious_indices, client_data_sizes, server_update
+            )
 
         # Pass the actual malicious count so robust aggregators (Krum, Bulyan)
         # use the correct f parameter instead of a heuristic.
@@ -146,6 +159,57 @@ class FederatedServer:
         self.global_model.load_state_dict(new_state)
 
         return self._compute_evasion_rate(info, malicious_indices)
+
+    def _apply_adaptive_scaling(
+        self,
+        client_updates,
+        malicious_indices: List[int],
+        data_sizes: List[int],
+        server_update,
+        iters: int = 15,
+    ):
+        """
+        GeoTox-Adaptive: scale the shaped malicious update up to the largest
+        factor the (known) defense still accepts.
+
+        White-box, omniscient upper bound: the attacker simulates the exact
+        aggregator on all updates and binary-searches the scale in
+        [1, max_scale] that keeps every malicious client accepted, then applies
+        it -- operating right at the defense's acceptance boundary for maximum
+        backdoor strength.
+        """
+        max_scale = self.attack_adaptive_max_scale
+        base = [
+            {k: client_updates[i][k].clone() for k in client_updates[i]}
+            for i in malicious_indices
+        ]
+
+        def set_scale(s: float):
+            for shaped, i in zip(base, malicious_indices):
+                client_updates[i] = {k: v * s for k, v in shaped.items()}
+
+        def accepted(s: float) -> bool:
+            set_scale(s)
+            _, info = aggregate(
+                client_updates, data_sizes, self.aggregation_method,
+                num_byzantine=len(malicious_indices), server_update=server_update,
+            )
+            return all(info.selected[i] for i in malicious_indices)
+
+        if accepted(max_scale):
+            set_scale(max_scale)              # defense tolerates the cap
+        elif not accepted(1.0):
+            set_scale(1.0)                    # even the base update is filtered
+        else:
+            lo, hi = 1.0, max_scale           # boundary is in (1, max_scale)
+            for _ in range(iters):
+                mid = 0.5 * (lo + hi)
+                if accepted(mid):
+                    lo = mid
+                else:
+                    hi = mid
+            set_scale(lo)
+        return client_updates
 
     @staticmethod
     def _compute_evasion_rate(info, malicious_indices: List[int]) -> Optional[float]:

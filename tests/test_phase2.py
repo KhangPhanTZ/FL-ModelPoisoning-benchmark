@@ -82,12 +82,14 @@ def _run_and_cos(updates, mu_hat, tau):
 def test_blend_lambda_contract():
     # Already aligned -> no blending needed.
     assert _blend_lambda(0.8, 0.5) == 0.0
-    # Opposed direction -> blended cosine must reach tau.
+    # Opposed (but not exactly anti-parallel) direction -> blended cosine
+    # must reach tau. c = -1 is a degenerate (zero-vector) edge case and is
+    # excluded on purpose.
     c, tau = -0.5, 0.6
     lam = _blend_lambda(c, tau)
     num = lam + (1 - lam) * c
     den = (lam ** 2 + (1 - lam) ** 2 + 2 * lam * (1 - lam) * c) ** 0.5
-    assert num / den >= tau - 1e-3, (lam, num / den)
+    assert den > 1e-9 and num / den >= tau - 1e-3, (lam, num / den)
 
 
 if __name__ == "__main__":

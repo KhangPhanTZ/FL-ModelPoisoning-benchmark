@@ -39,7 +39,7 @@ def parse_args():
         "--attack",
         type=str,
         default="none",
-        choices=["none", "lie", "minmax", "model_replacement", "geotox"],
+        choices=["none", "lie", "minmax", "model_replacement", "geotox", "geotox_adaptive"],
         help="Attack type (default: none)"
     )
 
@@ -55,6 +55,13 @@ def parse_args():
         type=float,
         default=0.7,
         help="GeoTox durability: fraction of low-importance coords kept (0..1)"
+    )
+
+    parser.add_argument(
+        "--adaptive_max_scale",
+        type=float,
+        default=5.0,
+        help="GeoTox-Adaptive: max scale searched against the defense (default: 5.0)"
     )
 
     parser.add_argument(
@@ -179,8 +186,10 @@ def main():
     print(f"Dataset:          {args.dataset}")
     print(f"Model:            {args.model}")
     print(f"Aggregation:      {args.aggregation}")
-    if args.attack == "geotox":
+    if args.attack in ("geotox", "geotox_adaptive"):
         attack_detail = f" (tau={args.tau}, mask_ratio={args.mask_ratio})"
+        if args.attack == "geotox_adaptive":
+            attack_detail += f" (adaptive<=x{args.adaptive_max_scale})"
     elif args.attack != "none":
         attack_detail = f" (z={args.z})"
     else:
@@ -253,6 +262,7 @@ def main():
         learning_rate=args.lr,
         attack_tau=args.tau,
         attack_mask_ratio=args.mask_ratio,
+        attack_adaptive_max_scale=args.adaptive_max_scale,
     )
 
     test_loader = get_test_loader(test_dataset)
@@ -276,7 +286,7 @@ def main():
         # attacks (model_replacement, geotox); untargeted attacks (LIE /
         # Min-Max) are reported via the accuracy drop versus the `none`
         # baseline instead.
-        if args.attack in ("model_replacement", "geotox") and args.malicious > 0:
+        if args.attack in ("model_replacement", "geotox", "geotox_adaptive") and args.malicious > 0:
             asr = server.compute_asr(test_loader, target_class=7)
 
         line = f"Round {round_num:3d} | Loss: {loss:.4f} | Accuracy: {accuracy:.2f}%"

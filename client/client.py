@@ -62,7 +62,7 @@ class FederatedClient:
                 # do not use data poisoning.  Model Replacement (Bagdasaryan
                 # et al., 2020) and GeoTox both train on triggered data so the
                 # local update carries a backdoor signal.
-                if self.is_malicious and self.attack_type in ("model_replacement", "geotox"):
+                if self.is_malicious and self.attack_type in ("model_replacement", "geotox", "geotox_adaptive"):
                     from data.backdoor import create_poisoned_batch
                     data, target = create_poisoned_batch(
                         data, target,

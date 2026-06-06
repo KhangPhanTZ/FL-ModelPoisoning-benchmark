@@ -68,10 +68,13 @@ python run_experiments.py
 |----------|---------|-------------|
 | `--dataset` | `mnist`, `fashion_mnist` | Dataset (default: mnist) |
 | `--aggregation` | `mean`, `median`, `krum`, `multi_krum`, `bulyan`, `fltrust` | Aggregation method |
-| `--attack` | `none`, `lie`, `minmax`, `model_replacement` | Attack type |
+| `--attack` | `none`, `lie`, `minmax`, `model_replacement`, `geotox`, `geotox_adaptive` | Attack type |
 | `--partition` | `iid`, `noniid` | Data distribution |
 | `--malicious` | Integer | Number of malicious clients |
-| `--z` | Float | Attack strength parameter |
+| `--z` | Float | Attack strength parameter (LIE/Min-Max/Model-Replacement) |
+| `--tau` | Float | GeoTox stealth: target cosine with benign mean (0..1) |
+| `--mask_ratio` | Float | GeoTox durability: fraction of low-importance coords kept |
+| `--adaptive_max_scale` | Float | GeoTox-Adaptive: max scale searched vs the defense |
 | `--alpha` | Float | Dirichlet alpha for non-IID (default: 0.5) |
 | `--root_size` | Integer | Clean root-set size for FLTrust (default: 100) |
 | `--rounds` | Integer | Number of FL rounds (default: 50) |
@@ -89,6 +92,17 @@ Maximizes distance from benign updates by perturbing in the opposite direction.
 
 ### Model Replacement
 Scales malicious updates to dominate after FedAvg aggregation.
+
+### GeoTox (this work)
+Multi-constraint stealthy + durable backdoor: hides the backdoor in
+low-importance coordinates (durability), blends toward the benign mean until
+`cos >= tau` (directional stealth), and rescales to the median benign norm
+(magnitude stealth). `--tau` is the Evasion<->ASR trade-off knob.
+
+### GeoTox-Adaptive (this work)
+White-box, omniscient upper bound: after GeoTox shaping, binary-searches the
+largest magnitude the *known* defense still accepts (`--adaptive_max_scale`),
+operating at the defense's acceptance boundary.
 
 ## Defenses
 
@@ -139,6 +153,19 @@ baseline plus the attack x malicious grid. The lists (`DATASETS`,
 `AGGREGATIONS`, `NONIID_ALPHAS`, `SEEDS`, `MALICIOUS_COUNTS`) are configurable
 at the top of the file - use `--dry-run` to preview the count and trim before
 launching.
+
+## Analysis
+
+After running experiments, aggregate them and print the headline analyses:
+
+```bash
+python3 analyze_results.py            # writes results/summary_metrics.csv
+python3 analyze_results.py --plot     # also save trade-off PNG (needs matplotlib)
+```
+
+This reads each `results/*.csv` with its `*_config.txt` sidecar, averages the
+last rounds, and prints the GeoTox **Evasion<->ASR trade-off** table (RQ1) and
+the non-IID **alpha-sensitivity** table (RQ2).
 
 ## Testing
 

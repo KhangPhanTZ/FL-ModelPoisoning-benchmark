@@ -44,7 +44,8 @@ ATTACK_Z = {
     "lie": 3.0,
     "minmax": 15.0,
     "model_replacement": 1.0,
-    "geotox": 0.0,  # GeoTox is controlled by tau, not z
+    "geotox": 0.0,           # GeoTox is controlled by tau, not z
+    "geotox_adaptive": 0.0,
 }
 
 # GeoTox stealth sweep (the trade-off knob: low tau = strong backdoor / low
@@ -87,10 +88,11 @@ def generate_all_configs() -> List[Dict]:
             for attack, mal in itertools.product(ATTACKS, MALICIOUS_COUNTS):
                 configs.append({**base, "attack": attack, "malicious": mal,
                                 "z": ATTACK_Z[attack], "tau": None})
-            # GeoTox: sweep malicious x tau (the Evasion<->ASR trade-off).
-            for mal, tau in itertools.product(MALICIOUS_COUNTS, GEOTOX_TAUS):
-                configs.append({**base, "attack": "geotox", "malicious": mal,
-                                "z": ATTACK_Z["geotox"], "tau": tau})
+            # GeoTox + GeoTox-Adaptive: sweep malicious x tau (Evasion<->ASR).
+            for atk in ("geotox", "geotox_adaptive"):
+                for mal, tau in itertools.product(MALICIOUS_COUNTS, GEOTOX_TAUS):
+                    configs.append({**base, "attack": atk, "malicious": mal,
+                                    "z": ATTACK_Z[atk], "tau": tau})
     return configs
 
 
@@ -102,7 +104,7 @@ def get_result_filename(config: Dict) -> str:
     if config["partition"] == "noniid" and config.get("alpha") is not None:
         base += f"_a{config['alpha']}"
     base += f"_m{config['malicious']}"
-    if config["attack"] == "geotox" and config.get("tau") is not None:
+    if config["attack"] in ("geotox", "geotox_adaptive") and config.get("tau") is not None:
         base += f"_t{config['tau']}"
     if config.get("seed") is not None:
         base += f"_s{config['seed']}"
@@ -144,7 +146,7 @@ def run_experiment(config: Dict, results_dir: Path) -> Tuple[bool, str]:
 
     if config["partition"] == "noniid" and config.get("alpha") is not None:
         cmd.extend(["--alpha", str(config["alpha"])])
-    if config["attack"] == "geotox" and config.get("tau") is not None:
+    if config["attack"] in ("geotox", "geotox_adaptive") and config.get("tau") is not None:
         cmd.extend(["--tau", str(config["tau"])])
 
     config_str = (

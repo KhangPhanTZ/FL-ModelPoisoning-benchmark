@@ -83,7 +83,7 @@ class FLLogger:
             base += f"_a{self.alpha}"
         base += f"_m{self.malicious}"
         # GeoTox sweeps tau; encode it so the trade-off runs do not collide.
-        if self.attack == "geotox" and self.tau is not None:
+        if self.attack in ("geotox", "geotox_adaptive") and self.tau is not None:
             base += f"_t{self.tau}"
         if self.seed is not None:
             base += f"_s{self.seed}"
@@ -220,6 +220,9 @@ def create_logger(args, skip_existing: bool = False) -> FLLogger:
         config["attack_z"] = args.z
     if args.partition == "noniid":
         config["alpha"] = args.alpha
+    if args.attack in ("geotox", "geotox_adaptive"):
+        config["tau"] = getattr(args, "tau", None)
+        config["mask_ratio"] = getattr(args, "mask_ratio", None)
 
     logger.log_config(config)
 
