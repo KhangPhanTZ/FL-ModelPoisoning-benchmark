@@ -23,6 +23,8 @@ class FederatedServer:
         attack_z: float = 1.0,
         root_loader: DataLoader = None,
         learning_rate: float = 0.01,
+        attack_tau: float = 0.5,
+        attack_mask_ratio: float = 0.7,
     ):
         self.global_model = global_model.to(device)
         self.clients = clients
@@ -30,6 +32,9 @@ class FederatedServer:
         self.aggregation_method = aggregation_method
         self.attack_type = attack_type
         self.attack_z = attack_z
+        # GeoTox stealth knobs.
+        self.attack_tau = attack_tau
+        self.attack_mask_ratio = attack_mask_ratio
         # Trusted clean root set used by FLTrust to compute a reference update.
         self.root_loader = root_loader
         self.learning_rate = learning_rate
@@ -114,6 +119,8 @@ class FederatedServer:
                 self.attack_type,
                 z=self.attack_z,
                 client_data_sizes=client_data_sizes,
+                tau=self.attack_tau,
+                mask_ratio=self.attack_mask_ratio,
             )
 
         # FLTrust needs a trusted server update computed on the clean root set.

@@ -39,8 +39,22 @@ def parse_args():
         "--attack",
         type=str,
         default="none",
-        choices=["none", "lie", "minmax", "model_replacement"],
+        choices=["none", "lie", "minmax", "model_replacement", "geotox"],
         help="Attack type (default: none)"
+    )
+
+    parser.add_argument(
+        "--tau",
+        type=float,
+        default=0.5,
+        help="GeoTox stealth: target cosine alignment with benign mean (0..1)"
+    )
+
+    parser.add_argument(
+        "--mask_ratio",
+        type=float,
+        default=0.7,
+        help="GeoTox durability: fraction of low-importance coords kept (0..1)"
     )
 
     parser.add_argument(
@@ -165,7 +179,13 @@ def main():
     print(f"Dataset:          {args.dataset}")
     print(f"Model:            {args.model}")
     print(f"Aggregation:      {args.aggregation}")
-    print(f"Attack:           {args.attack}" + (f" (z={args.z})" if args.attack != "none" else ""))
+    if args.attack == "geotox":
+        attack_detail = f" (tau={args.tau}, mask_ratio={args.mask_ratio})"
+    elif args.attack != "none":
+        attack_detail = f" (z={args.z})"
+    else:
+        attack_detail = ""
+    print(f"Attack:           {args.attack}{attack_detail}")
     print(f"Partition:        {args.partition}" + (f" (alpha={args.alpha})" if args.partition == "noniid" else ""))
     print(f"Total Clients:    {args.num_clients}")
     print(f"Clients/Round:    {args.clients_per_round}")
@@ -231,6 +251,8 @@ def main():
         attack_z=args.z,
         root_loader=root_loader,
         learning_rate=args.lr,
+        attack_tau=args.tau,
+        attack_mask_ratio=args.mask_ratio,
     )
 
     test_loader = get_test_loader(test_dataset)
@@ -251,9 +273,10 @@ def main():
         asr = None
 
         # ASR is a backdoor metric and is only meaningful for the backdoor
-        # (model_replacement) attack; untargeted attacks (LIE / Min-Max) are
-        # reported via the accuracy drop versus the `none` baseline instead.
-        if args.attack == "model_replacement" and args.malicious > 0:
+        # attacks (model_replacement, geotox); untargeted attacks (LIE /
+        # Min-Max) are reported via the accuracy drop versus the `none`
+        # baseline instead.
+        if args.attack in ("model_replacement", "geotox") and args.malicious > 0:
             asr = server.compute_asr(test_loader, target_class=7)
 
         line = f"Round {round_num:3d} | Loss: {loss:.4f} | Accuracy: {accuracy:.2f}%"

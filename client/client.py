@@ -57,11 +57,12 @@ class FederatedClient:
             for batch_idx, (data, target) in enumerate(self.data_loader):
                 data, target = data.to(self.device), target.to(self.device)
 
-                # Inject backdoor ONLY for model_replacement attack
-                # LIE and Min-Max are Byzantine weight attacks — they do not
-                # use data poisoning.  Backdoor training is specific to the
-                # Model Replacement attack (Bagdasaryan et al., 2020).
-                if self.is_malicious and self.attack_type == "model_replacement":
+                # Inject backdoor for the backdoor-style attacks only.
+                # LIE and Min-Max are untargeted Byzantine weight attacks and
+                # do not use data poisoning.  Model Replacement (Bagdasaryan
+                # et al., 2020) and GeoTox both train on triggered data so the
+                # local update carries a backdoor signal.
+                if self.is_malicious and self.attack_type in ("model_replacement", "geotox"):
                     from data.backdoor import create_poisoned_batch
                     data, target = create_poisoned_batch(
                         data, target,

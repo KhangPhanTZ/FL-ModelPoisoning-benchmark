@@ -25,6 +25,7 @@ class FLLogger:
         dataset: str = "mnist",
         alpha: float = None,
         seed: int = None,
+        tau: float = None,
     ):
         """
         Initialize the logger.
@@ -49,6 +50,7 @@ class FLLogger:
         self.dataset = dataset
         self.alpha = alpha
         self.seed = seed
+        self.tau = tau
 
         # Create results directory if it doesn't exist
         self.results_dir.mkdir(parents=True, exist_ok=True)
@@ -80,6 +82,9 @@ class FLLogger:
         if self.partition == "noniid" and self.alpha is not None:
             base += f"_a{self.alpha}"
         base += f"_m{self.malicious}"
+        # GeoTox sweeps tau; encode it so the trade-off runs do not collide.
+        if self.attack == "geotox" and self.tau is not None:
+            base += f"_t{self.tau}"
         if self.seed is not None:
             base += f"_s{self.seed}"
         return f"{base}.csv"
@@ -191,6 +196,7 @@ def create_logger(args, skip_existing: bool = False) -> FLLogger:
         dataset=getattr(args, "dataset", "mnist"),
         alpha=getattr(args, "alpha", None),
         seed=getattr(args, "seed", None),
+        tau=getattr(args, "tau", None),
     )
 
     # Log configuration
