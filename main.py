@@ -215,23 +215,30 @@ def main():
     for round_num in range(1, args.rounds + 1):
         selected_clients = server.select_clients(args.clients_per_round)
 
-        server.train_round(selected_clients, args.local_epochs)
+        evasion_rate = server.train_round(selected_clients, args.local_epochs)
 
         loss, accuracy = server.evaluate(test_loader)
         asr = None
 
-        # Compute ASR only for model replacement attack.
+        # ASR is a backdoor metric and is only meaningful for the backdoor
+        # (model_replacement) attack; untargeted attacks (LIE / Min-Max) are
+        # reported via the accuracy drop versus the `none` baseline instead.
         if args.attack == "model_replacement" and args.malicious > 0:
-            asr = server.compute_asr(test_loader, source_class=1, target_class=7)
-            print(f"Round {round_num:3d} | Loss: {loss:.4f} | Accuracy: {accuracy:.2f}% | ASR: {asr:.2f}%")
-        else:
-            print(f"Round {round_num:3d} | Loss: {loss:.4f} | Accuracy: {accuracy:.2f}%")
+            asr = server.compute_asr(test_loader, target_class=7)
+
+        line = f"Round {round_num:3d} | Loss: {loss:.4f} | Accuracy: {accuracy:.2f}%"
+        if asr is not None:
+            line += f" | ASR: {asr:.2f}%"
+        if evasion_rate is not None:
+            line += f" | Evasion: {evasion_rate:.1f}%"
+        print(line)
 
         logger.log_round(
             round_num=round_num,
             loss=loss,
             accuracy=accuracy,
-            asr=asr
+            asr=asr,
+            evasion_rate=evasion_rate
         )
 
         if np.isnan(loss):

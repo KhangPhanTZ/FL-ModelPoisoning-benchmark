@@ -1,432 +1,305 @@
+"""
+Byzantine-robust aggregation operating in UPDATE SPACE.
+
+Phase-0 refactor.  Every aggregator now consumes client *updates*
+    u_i = w_local_i - w_global
+and returns the aggregated update  Delta  (the server reconstructs the new
+global model as  w_global + Delta).  This keeps norms / distances / cosine
+similarities defined on gradients, which is what robust aggregators assume.
+
+Each aggregator additionally returns an ``AggregationInfo`` describing, per
+client, the weight it received in the final aggregate and whether it was
+"accepted".  This instrumentation is what lets us measure the **Evasion Rate**
+of an attack: the fraction of malicious client-rounds whose update was accepted
+(not filtered out) by the defense.
+
+For coordinate-wise defenses (Median, Trimmed-Mean inside Bulyan) there is no
+per-client accept/reject decision; such clients are reported as accepted with a
+``selection_type`` of ``"coordinate_wise"`` so downstream code can treat their
+evasion rate appropriately.
+"""
+
 import torch
-import torch.nn as nn
-from typing import List, Dict
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional, Tuple
 
 
-def fedavg(
-    client_weights: List[Dict[str, torch.Tensor]],
-    client_data_sizes: List[int]
-) -> Dict[str, torch.Tensor]:
-    """
-    FedAvg aggregation: weighted average of client models based on data size.
+@dataclass
+class AggregationInfo:
+    """Per-client bookkeeping returned by every aggregator."""
 
-    Args:
-        client_weights: List of state dicts from each client
-        client_data_sizes: Number of samples each client has
-
-    Returns:
-        Aggregated model state dict
-    """
-    if not client_weights:
-        raise ValueError("No client weights provided for aggregation")
-
-    total_samples = sum(client_data_sizes)
-
-    aggregated_weights = {}
-    for key in client_weights[0].keys():
-        weighted_sum = torch.zeros_like(client_weights[0][key], dtype=torch.float32)
-
-        for client_weight, data_size in zip(client_weights, client_data_sizes):
-            weight_factor = data_size / total_samples
-            weighted_sum += client_weight[key].float() * weight_factor
-
-        aggregated_weights[key] = weighted_sum
-
-    return aggregated_weights
+    selected: List[bool]
+    weights: List[float]
+    # "selection": defense explicitly accepts/rejects clients (Krum, FLTrust...)
+    # "coordinate_wise": no per-client decision (Median); selected is all-True.
+    selection_type: str = "selection"
+    extra: Dict[str, object] = field(default_factory=dict)
 
 
-def median(
-    client_weights: List[Dict[str, torch.Tensor]],
-    client_data_sizes: List[int]
-) -> Dict[str, torch.Tensor]:
-    """
-    Coordinate-wise median aggregation (robust to outliers).
+Update = Dict[str, torch.Tensor]
 
-    For each parameter, compute the median across all clients.
 
-    Args:
-        client_weights: List of state dicts from each client
-        client_data_sizes: Number of samples each client has (unused but kept for API consistency)
+def _zeros_like_update(reference: Update) -> Update:
+    return {k: torch.zeros_like(v, dtype=torch.float32) for k, v in reference.items()}
 
-    Returns:
-        Aggregated model state dict
-    """
-    if not client_weights:
-        raise ValueError("No client weights provided for aggregation")
 
-    aggregated_weights = {}
-    for key in client_weights[0].keys():
-        # Stack all client weights for this parameter
-        stacked = torch.stack([w[key].float() for w in client_weights])
-        # Compute coordinate-wise median
-        aggregated_weights[key] = stacked.median(dim=0)[0]
+def _flatten(update: Update) -> torch.Tensor:
+    return torch.cat([v.float().flatten() for v in update.values()])
 
-    return aggregated_weights
+
+def _krum_scores(flat_updates: List[torch.Tensor], k: int) -> List[float]:
+    """Krum score: sum of the k smallest squared distances to other clients."""
+    n = len(flat_updates)
+    scores = []
+    for i in range(n):
+        distances = [
+            torch.sum((flat_updates[i] - flat_updates[j]) ** 2).item()
+            for j in range(n)
+            if i != j
+        ]
+        distances.sort()
+        scores.append(sum(distances[:k]))
+    return scores
+
+
+def fedavg(updates: List[Update], data_sizes: List[int]) -> Tuple[Update, AggregationInfo]:
+    """Weighted average of updates (data-size weighted)."""
+    if not updates:
+        raise ValueError("No client updates provided for aggregation")
+
+    total = sum(data_sizes)
+    weights = [size / total for size in data_sizes]
+
+    aggregated = _zeros_like_update(updates[0])
+    for key in aggregated:
+        for update, w in zip(updates, weights):
+            aggregated[key] += update[key].float() * w
+
+    info = AggregationInfo(selected=[True] * len(updates), weights=weights)
+    return aggregated, info
+
+
+def median(updates: List[Update], data_sizes: List[int]) -> Tuple[Update, AggregationInfo]:
+    """Coordinate-wise median of updates."""
+    if not updates:
+        raise ValueError("No client updates provided for aggregation")
+
+    aggregated = {}
+    for key in updates[0]:
+        stacked = torch.stack([u[key].float() for u in updates])
+        aggregated[key] = stacked.median(dim=0)[0]
+
+    n = len(updates)
+    info = AggregationInfo(
+        selected=[True] * n,
+        weights=[1.0 / n] * n,
+        selection_type="coordinate_wise",
+    )
+    return aggregated, info
 
 
 def krum(
-    client_weights: List[Dict[str, torch.Tensor]],
-    client_data_sizes: List[int],
-    num_byzantine: int = 0
-) -> Dict[str, torch.Tensor]:
-    """
-    Krum aggregation: select the update closest to others.
+    updates: List[Update],
+    data_sizes: List[int],
+    num_byzantine: int = 0,
+) -> Tuple[Update, AggregationInfo]:
+    """Krum: select the single update closest to its n-f-2 nearest neighbours."""
+    if not updates:
+        raise ValueError("No client updates provided for aggregation")
 
-    Krum selects the client whose update has minimum sum of squared distances
-    to its (n - f - 2) nearest neighbors, where f is the number of Byzantine clients.
-
-    Args:
-        client_weights: List of state dicts from each client
-        client_data_sizes: Number of samples each client has (unused)
-        num_byzantine: Expected number of Byzantine/malicious clients
-
-    Returns:
-        Selected model state dict (single best client)
-    """
-    if not client_weights:
-        raise ValueError("No client weights provided for aggregation")
-
-    n = len(client_weights)
+    n = len(updates)
     if n == 1:
-        return client_weights[0]
+        return updates[0], AggregationInfo(selected=[True], weights=[1.0])
 
-    # Number of neighbors to consider: n - f - 2 (at least 1)
     f = min(num_byzantine, n - 2)
     k = max(1, n - f - 2)
 
-    # Flatten each client's weights into a single vector for distance computation
-    flat_weights = []
-    for weights in client_weights:
-        flat = torch.cat([w.float().flatten() for w in weights.values()])
-        flat_weights.append(flat)
-
-    # Compute pairwise distances (memory efficient: compute row by row)
-    scores = []
-    for i in range(n):
-        distances = []
-        for j in range(n):
-            if i != j:
-                dist = torch.sum((flat_weights[i] - flat_weights[j]) ** 2).item()
-                distances.append(dist)
-
-        # Sort distances and sum the k smallest
-        distances.sort()
-        score = sum(distances[:k])
-        scores.append(score)
-
-    # Select client with minimum score
+    flat = [_flatten(u) for u in updates]
+    scores = _krum_scores(flat, k)
     selected_idx = scores.index(min(scores))
 
-    return client_weights[selected_idx]
+    selected = [i == selected_idx for i in range(n)]
+    weights = [1.0 if i == selected_idx else 0.0 for i in range(n)]
+    info = AggregationInfo(selected=selected, weights=weights,
+                           extra={"selected_idx": selected_idx})
+    return updates[selected_idx], info
 
 
 def multi_krum(
-    client_weights: List[Dict[str, torch.Tensor]],
-    client_data_sizes: List[int],
+    updates: List[Update],
+    data_sizes: List[int],
     num_byzantine: int = 0,
-    num_select: int = 0
-) -> Dict[str, torch.Tensor]:
-    """
-    Multi-Krum: select top-m clients and average their updates.
+    num_select: int = 0,
+) -> Tuple[Update, AggregationInfo]:
+    """Multi-Krum: average the m updates with the lowest Krum scores."""
+    if not updates:
+        raise ValueError("No client updates provided for aggregation")
 
-    Args:
-        client_weights: List of state dicts from each client
-        client_data_sizes: Number of samples each client has
-        num_byzantine: Expected number of Byzantine/malicious clients
-        num_select: Number of clients to select (0 = auto: n - f)
-
-    Returns:
-        Averaged model from selected clients
-    """
-    if not client_weights:
-        raise ValueError("No client weights provided for aggregation")
-
-    n = len(client_weights)
+    n = len(updates)
     if n == 1:
-        return client_weights[0]
+        return updates[0], AggregationInfo(selected=[True], weights=[1.0])
 
     f = min(num_byzantine, n - 2)
     k = max(1, n - f - 2)
     m = num_select if num_select > 0 else max(1, n - f)
 
-    # Flatten weights
-    flat_weights = []
-    for weights in client_weights:
-        flat = torch.cat([w.float().flatten() for w in weights.values()])
-        flat_weights.append(flat)
+    flat = [_flatten(u) for u in updates]
+    scores = _krum_scores(flat, k)
+    selected_indices = sorted(range(n), key=lambda i: scores[i])[:m]
+    selected_set = set(selected_indices)
 
-    # Compute scores
-    scores = []
-    for i in range(n):
-        distances = []
-        for j in range(n):
-            if i != j:
-                dist = torch.sum((flat_weights[i] - flat_weights[j]) ** 2).item()
-                distances.append(dist)
-        distances.sort()
-        score = sum(distances[:k])
-        scores.append((score, i))
+    aggregated = _zeros_like_update(updates[0])
+    for key in aggregated:
+        stacked = torch.stack([updates[i][key].float() for i in selected_indices])
+        aggregated[key] = stacked.mean(dim=0)
 
-    # Select top-m clients with lowest scores
-    scores.sort(key=lambda x: x[0])
-    selected_indices = [idx for _, idx in scores[:m]]
-
-    # Average selected clients
-    aggregated_weights = {}
-    for key in client_weights[0].keys():
-        stacked = torch.stack([client_weights[i][key].float() for i in selected_indices])
-        aggregated_weights[key] = stacked.mean(dim=0)
-
-    return aggregated_weights
+    selected = [i in selected_set for i in range(n)]
+    weights = [1.0 / m if i in selected_set else 0.0 for i in range(n)]
+    info = AggregationInfo(selected=selected, weights=weights,
+                           extra={"selected_indices": selected_indices})
+    return aggregated, info
 
 
 def bulyan(
-    client_weights: List[Dict[str, torch.Tensor]],
-    client_data_sizes: List[int],
-    num_byzantine: int = 0
-) -> Dict[str, torch.Tensor]:
-    """
-    Bulyan aggregation: Multi-Krum selection + coordinate-wise trimmed mean.
+    updates: List[Update],
+    data_sizes: List[int],
+    num_byzantine: int = 0,
+) -> Tuple[Update, AggregationInfo]:
+    """Bulyan: Multi-Krum selection followed by a coordinate-wise trimmed mean."""
+    if not updates:
+        raise ValueError("No client updates provided for aggregation")
 
-    1. Use Multi-Krum to select (n - 2f) most trustworthy clients
-    2. Apply coordinate-wise trimmed mean on selected updates
-
-    Args:
-        client_weights: List of state dicts from each client
-        client_data_sizes: Number of samples each client has
-        num_byzantine: Expected number of Byzantine/malicious clients
-
-    Returns:
-        Aggregated model state dict
-    """
-    if not client_weights:
-        raise ValueError("No client weights provided for aggregation")
-
-    n = len(client_weights)
+    n = len(updates)
     if n == 1:
-        return client_weights[0]
+        return updates[0], AggregationInfo(selected=[True], weights=[1.0])
 
     f = min(num_byzantine, (n - 3) // 2)  # Bulyan requires n >= 4f + 3
     k = max(1, n - f - 2)
-    m = max(1, n - 2 * f)  # Select n - 2f clients
+    m = max(1, n - 2 * f)
 
-    # Step 1: Multi-Krum selection
-    flat_weights = []
-    for weights in client_weights:
-        flat = torch.cat([w.float().flatten() for w in weights.values()])
-        flat_weights.append(flat)
+    flat = [_flatten(u) for u in updates]
+    scores = _krum_scores(flat, k)
+    selected_indices = sorted(range(n), key=lambda i: scores[i])[:m]
+    selected_set = set(selected_indices)
 
-    scores = []
-    for i in range(n):
-        distances = []
-        for j in range(n):
-            if i != j:
-                dist = torch.sum((flat_weights[i] - flat_weights[j]) ** 2).item()
-                distances.append(dist)
-        distances.sort()
-        score = sum(distances[:k])
-        scores.append((score, i))
-
-    scores.sort(key=lambda x: x[0])
-    selected_indices = [idx for _, idx in scores[:m]]
-
-    # Step 2: Coordinate-wise trimmed mean on selected clients
-    # Trim beta values from each end (beta = f for Bulyan)
     beta = max(1, f) if len(selected_indices) > 2 else 0
 
-    aggregated_weights = {}
-    for key in client_weights[0].keys():
-        stacked = torch.stack([client_weights[i][key].float() for i in selected_indices])
-
+    aggregated = {}
+    for key in updates[0]:
+        stacked = torch.stack([updates[i][key].float() for i in selected_indices])
         if beta > 0 and stacked.size(0) > 2 * beta:
-            # Sort along client dimension and trim
             sorted_vals, _ = torch.sort(stacked, dim=0)
-            trimmed = sorted_vals[beta:-beta]
-            aggregated_weights[key] = trimmed.mean(dim=0)
+            aggregated[key] = sorted_vals[beta:-beta].mean(dim=0)
         else:
-            aggregated_weights[key] = stacked.mean(dim=0)
+            aggregated[key] = stacked.mean(dim=0)
 
-    return aggregated_weights
-
-
-def clip_updates(
-    client_weights: List[Dict[str, torch.Tensor]],
-    global_weights: Dict[str, torch.Tensor],
-    clip_norm: float = 10.0
-) -> List[Dict[str, torch.Tensor]]:
-    """
-    Clip update norms to limit influence of any single client.
-
-    Args:
-        client_weights: List of client model weights
-        global_weights: Current global model weights
-        clip_norm: Maximum L2 norm for updates
-
-    Returns:
-        Clipped client weights
-    """
-    clipped = []
-    for weights in client_weights:
-        # Compute update (difference from global)
-        update_flat = torch.cat([
-            (weights[key].float() - global_weights[key].float()).flatten()
-            for key in weights.keys()
-        ])
-
-        norm = torch.norm(update_flat)
-        scale = min(1.0, clip_norm / (norm.item() + 1e-8))
-
-        if scale < 1.0:
-            clipped_weights = {}
-            for key in weights.keys():
-                update = weights[key].float() - global_weights[key].float()
-                clipped_weights[key] = global_weights[key].float() + scale * update
-            clipped.append(clipped_weights)
-        else:
-            clipped.append(weights)
-
-    return clipped
+    selected = [i in selected_set for i in range(n)]
+    weights = [1.0 / m if i in selected_set else 0.0 for i in range(n)]
+    info = AggregationInfo(
+        selected=selected,
+        weights=weights,
+        selection_type="coordinate_wise",  # trimmed mean acts per coordinate
+        extra={"selected_indices": selected_indices, "trim": beta},
+    )
+    return aggregated, info
 
 
 def fltrust(
-    client_weights: List[Dict[str, torch.Tensor]],
-    client_data_sizes: List[int],
-    server_update: Dict[str, torch.Tensor] = None,
-    global_weights: Dict[str, torch.Tensor] = None
-) -> Dict[str, torch.Tensor]:
+    updates: List[Update],
+    data_sizes: List[int],
+    server_update: Optional[Update] = None,
+) -> Tuple[Update, AggregationInfo]:
     """
-    FLTrust aggregation: use server's trusted update to compute trust scores.
+    FLTrust: weight each client update by ReLU(cosine(u_i, u_server)).
 
-    Trust score = max(0, cosine_similarity(client_update, server_update))
-    Final = normalized weighted average using trust scores.
-
-    Args:
-        client_weights: List of state dicts from each client
-        client_data_sizes: Number of samples each client has
-        server_update: Server's trusted update (computed on clean data)
-        global_weights: Current global model weights
-
-    Returns:
-        Aggregated model state dict
+    Each accepted update is normalised to the server-update magnitude before the
+    trust-weighted average.  When no trusted server update is available (no root
+    dataset yet, Phase 0), we fall back to the coordinate-wise median of the
+    updates as a trusted reference direction.
     """
-    if not client_weights:
-        raise ValueError("No client weights provided for aggregation")
+    if not updates:
+        raise ValueError("No client updates provided for aggregation")
 
-    n = len(client_weights)
+    n = len(updates)
+    fallback_reference = server_update is None
+    if fallback_reference:
+        server_update, _ = median(updates, data_sizes)
 
-    # If no server update provided, fall back to computing trust from median
-    if server_update is None or global_weights is None:
-        # Use median as trusted reference
-        server_update = median(client_weights, client_data_sizes)
-        # Compute pseudo global_weights as mean of all
-        global_weights = {}
-        for key in client_weights[0].keys():
-            stacked = torch.stack([w[key].float() for w in client_weights])
-            global_weights[key] = stacked.mean(dim=0)
-
-    # Flatten server update
-    server_flat = torch.cat([
-        (server_update[key].float() - global_weights[key].float()).flatten()
-        for key in server_update.keys()
-    ])
+    server_flat = _flatten(server_update)
     server_norm = torch.norm(server_flat)
-
     if server_norm < 1e-8:
-        # Fallback to simple average if server update is zero
-        return fedavg(client_weights, client_data_sizes)
+        agg, info = fedavg(updates, data_sizes)
+        info.extra["fltrust_fallback"] = "zero_server_update"
+        return agg, info
 
-    # Compute trust scores for each client
     trust_scores = []
-    client_updates_flat = []
-
-    for weights in client_weights:
-        client_flat = torch.cat([
-            (weights[key].float() - global_weights[key].float()).flatten()
-            for key in weights.keys()
-        ])
-        client_updates_flat.append(client_flat)
-
-        # Cosine similarity
-        client_norm = torch.norm(client_flat)
-        if client_norm < 1e-8:
+    client_norms = []
+    for u in updates:
+        flat = _flatten(u)
+        norm = torch.norm(flat)
+        client_norms.append(norm)
+        if norm < 1e-8:
             trust_scores.append(0.0)
         else:
-            cos_sim = torch.dot(client_flat, server_flat) / (client_norm * server_norm)
-            # ReLU: only positive correlations contribute
-            trust = max(0.0, cos_sim.item())
-            trust_scores.append(trust)
+            cos = torch.dot(flat, server_flat) / (norm * server_norm)
+            trust_scores.append(max(0.0, cos.item()))
 
-    # Normalize trust scores
     total_trust = sum(trust_scores)
     if total_trust < 1e-8:
-        # All clients untrusted, use median
-        return median(client_weights, client_data_sizes)
+        agg, info = median(updates, data_sizes)
+        info.extra["fltrust_fallback"] = "all_untrusted"
+        return agg, info
 
     normalized_trust = [t / total_trust for t in trust_scores]
 
-    # Aggregate with trust-weighted average, normalizing each client update
-    aggregated_weights = {}
-    for key in client_weights[0].keys():
-        weighted_sum = torch.zeros_like(client_weights[0][key], dtype=torch.float32)
+    aggregated = _zeros_like_update(updates[0])
+    for i, u in enumerate(updates):
+        if normalized_trust[i] <= 0 or client_norms[i] < 1e-8:
+            continue
+        scale = (server_norm / client_norms[i]).item()
+        for key in aggregated:
+            aggregated[key] += normalized_trust[i] * scale * u[key].float()
 
-        for i, weights in enumerate(client_weights):
-            if normalized_trust[i] > 0:
-                # Normalize client update to server update magnitude
-                client_update = weights[key].float() - global_weights[key].float()
-                client_norm = torch.norm(client_updates_flat[i])
-
-                if client_norm > 1e-8:
-                    # Scale client update to have same norm as server
-                    scale = server_norm / client_norm
-                    normalized_update = scale * client_update
-                    weighted_sum += normalized_trust[i] * normalized_update
-
-        # Add to global weights
-        aggregated_weights[key] = global_weights[key].float() + weighted_sum
-
-    return aggregated_weights
+    selected = [t > 0 for t in trust_scores]
+    info = AggregationInfo(
+        selected=selected,
+        weights=normalized_trust,
+        extra={
+            "trust_scores": trust_scores,
+            "fallback_reference": fallback_reference,
+        },
+    )
+    return aggregated, info
 
 
 def aggregate(
-    client_weights: List[Dict[str, torch.Tensor]],
-    client_data_sizes: List[int],
+    updates: List[Update],
+    data_sizes: List[int],
     aggregation_method: str = "mean",
-    **kwargs
-) -> Dict[str, torch.Tensor]:
+    **kwargs,
+) -> Tuple[Update, AggregationInfo]:
     """
-    Aggregate client model weights using specified method.
-
-    Args:
-        client_weights: List of state dicts from each client
-        client_data_sizes: Number of samples each client has
-        aggregation_method: Aggregation strategy
-        **kwargs: Additional parameters (global_weights, server_update for fltrust)
+    Aggregate client updates with the given method.
 
     Returns:
-        Aggregated model state dict
+        (aggregated_update, info) where ``aggregated_update`` is Delta such that
+        the new global model is  w_global + Delta, and ``info`` carries the
+        per-client selection/weight bookkeeping used for Evasion-Rate metrics.
     """
+    default_byz = max(1, len(updates) // 5)
+
     if aggregation_method == "mean":
-        return fedavg(client_weights, client_data_sizes)
-
+        return fedavg(updates, data_sizes)
     if aggregation_method == "median":
-        return median(client_weights, client_data_sizes)
-
+        return median(updates, data_sizes)
     if aggregation_method == "krum":
-        num_byzantine = kwargs.get("num_byzantine", max(1, len(client_weights) // 5))
-        return krum(client_weights, client_data_sizes, num_byzantine)
-
+        return krum(updates, data_sizes, kwargs.get("num_byzantine", default_byz))
     if aggregation_method == "multi_krum":
-        num_byzantine = kwargs.get("num_byzantine", max(1, len(client_weights) // 5))
-        return multi_krum(client_weights, client_data_sizes, num_byzantine)
-
+        return multi_krum(updates, data_sizes, kwargs.get("num_byzantine", default_byz))
     if aggregation_method == "bulyan":
-        num_byzantine = kwargs.get("num_byzantine", max(1, len(client_weights) // 5))
-        return bulyan(client_weights, client_data_sizes, num_byzantine)
-
+        return bulyan(updates, data_sizes, kwargs.get("num_byzantine", default_byz))
     if aggregation_method == "fltrust":
-        global_weights = kwargs.get("global_weights", None)
-        server_update = kwargs.get("server_update", None)
-        return fltrust(client_weights, client_data_sizes, server_update, global_weights)
+        return fltrust(updates, data_sizes, kwargs.get("server_update"))
 
     raise ValueError(
         f"Unknown aggregation method: {aggregation_method}. "

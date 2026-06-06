@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 import random
 import copy
 
@@ -37,50 +37,79 @@ class FederatedServer:
         self,
         selected_clients: List[FederatedClient],
         local_epochs: int = 1
-    ) -> None:
-        """Execute one round of federated training."""
-        client_weights = []
+    ) -> Optional[float]:
+        """
+        Execute one round of federated training (in update space).
+
+        Returns:
+            The Evasion Rate for this round: the fraction of malicious clients
+            whose update was accepted (not filtered) by the aggregator, or None
+            if no malicious client participated this round.
+        """
+        client_updates = []
         client_data_sizes = []
         malicious_indices = []
 
-        # Store global weights for model_replacement attack
+        # Current global weights (CPU float) used to form per-client updates.
         global_weights = {
-            name: param.cpu().clone()
+            name: param.detach().cpu().float().clone()
             for name, param in self.global_model.state_dict().items()
         }
 
         for idx, client in enumerate(selected_clients):
-            weights = client.train(self.global_model, local_epochs)
-            client_weights.append(weights)
+            local_weights = client.train(self.global_model, local_epochs)
+            # Update space: u_i = w_local_i - w_global
+            update = {
+                key: local_weights[key].float() - global_weights[key]
+                for key in global_weights
+            }
+            client_updates.append(update)
             client_data_sizes.append(len(client))
 
             if client.is_malicious:
                 malicious_indices.append(idx)
 
-        # Apply attack if any malicious clients
+        # Apply the attack to the malicious clients' updates.
         if malicious_indices and self.attack_type != "none":
-            client_weights = apply_attack(
-                client_weights,
+            client_updates = apply_attack(
+                client_updates,
                 malicious_indices,
                 self.attack_type,
                 z=self.attack_z,
-                global_weights=global_weights,
-                client_data_sizes=client_data_sizes
+                client_data_sizes=client_data_sizes,
             )
 
-        # Pass actual malicious count so robust aggregators (Krum, Bulyan)
+        # Pass the actual malicious count so robust aggregators (Krum, Bulyan)
         # use the correct f parameter instead of a heuristic.
-        num_byzantine = len(malicious_indices)
-
-        aggregated_weights = aggregate(
-            client_weights,
+        aggregated_update, info = aggregate(
+            client_updates,
             client_data_sizes,
             self.aggregation_method,
-            global_weights=global_weights,
-            num_byzantine=num_byzantine
+            num_byzantine=len(malicious_indices),
         )
 
-        self.global_model.load_state_dict(aggregated_weights)
+        # Reconstruct the new global model: w_global + Delta.
+        new_state = {
+            key: global_weights[key] + aggregated_update[key]
+            for key in global_weights
+        }
+        self.global_model.load_state_dict(new_state)
+
+        return self._compute_evasion_rate(info, malicious_indices)
+
+    @staticmethod
+    def _compute_evasion_rate(info, malicious_indices: List[int]) -> Optional[float]:
+        """
+        Fraction of malicious clients whose update was accepted by the defense.
+
+        For coordinate-wise defenses (Median) there is no per-client rejection,
+        so every participating client counts as accepted; this is reported as-is
+        and should be interpreted alongside ``info.selection_type`` downstream.
+        """
+        if not malicious_indices:
+            return None
+        accepted = sum(1 for i in malicious_indices if info.selected[i])
+        return 100.0 * accepted / len(malicious_indices)
 
     def evaluate(self, test_loader: DataLoader) -> Tuple[float, float]:
         """Evaluate global model on test data."""
@@ -108,23 +137,28 @@ class FederatedServer:
     def compute_asr(
         self,
         test_loader: DataLoader,
-        target_class: int = 7
+        target_class: int = 7,
+        source_class: Optional[int] = None,
     ) -> float:
         """
         Compute Attack Success Rate (ASR) using triggered samples.
 
-        ASR = (# non-target triggered samples classified as target) /
-              (# non-target triggered samples)
+        ASR = (# eligible triggered samples classified as target) /
+              (# eligible triggered samples)
 
-        Samples whose true label is already the target class are excluded
-        from both numerator and denominator to avoid inflating ASR.
+        Eligible samples are those whose true label is NOT the target class
+        (so we never inflate ASR with samples already in the target class). If
+        ``source_class`` is given, only samples of that class are considered,
+        matching a single-source backdoor; otherwise all non-target samples are
+        used (all-to-target backdoor).
 
         Args:
-            test_loader: Test data loader
-            target_class: Target class for backdoor attack (default: 7)
+            test_loader: Test data loader.
+            target_class: Target label the backdoor maps triggered inputs to.
+            source_class: If set, restrict ASR to this source class only.
 
         Returns:
-            ASR percentage (0-100)
+            ASR percentage (0-100).
         """
         from data.backdoor import add_trigger
 
@@ -137,8 +171,11 @@ class FederatedServer:
                 data = data.to(self.device)
                 target = target.to(self.device)
 
-                # Exclude samples already belonging to the target class
+                # Eligible samples: not already in the target class, and (if a
+                # source class is specified) belonging to that source class.
                 mask = target != target_class
+                if source_class is not None:
+                    mask = mask & (target == source_class)
                 if mask.sum() == 0:
                     continue
 
