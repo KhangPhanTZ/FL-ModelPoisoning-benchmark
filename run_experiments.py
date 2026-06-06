@@ -52,6 +52,12 @@ ATTACK_Z = {
 # evasion, high tau = stealthy / weak backdoor).
 GEOTOX_TAUS = [0.0, 0.5, 0.9]
 
+# Durability study (RQ3): if set (e.g. 25 with --rounds 50), additionally run
+# GeoTox / GeoTox-Adaptive where the attacker leaves at this round, so backdoor
+# decay can be measured. None disables (keeps the main grid unchanged).
+DURABILITY_UNTIL = None
+DURABILITY_TAUS = [0.0]  # strongest backdoor is the natural durability probe
+
 
 def _partition_settings():
     """Yield (partition, alpha) pairs: IID (no alpha) + each non-IID alpha."""
@@ -93,6 +99,13 @@ def generate_all_configs() -> List[Dict]:
                 for mal, tau in itertools.product(MALICIOUS_COUNTS, GEOTOX_TAUS):
                     configs.append({**base, "attack": atk, "malicious": mal,
                                     "z": ATTACK_Z[atk], "tau": tau})
+            # Optional durability runs (attacker leaves at DURABILITY_UNTIL).
+            if DURABILITY_UNTIL:
+                for atk in ("geotox", "geotox_adaptive"):
+                    for mal, tau in itertools.product(MALICIOUS_COUNTS, DURABILITY_TAUS):
+                        configs.append({**base, "attack": atk, "malicious": mal,
+                                        "z": ATTACK_Z[atk], "tau": tau,
+                                        "attack_until": DURABILITY_UNTIL})
     return configs
 
 
@@ -104,6 +117,8 @@ def get_result_filename(config: Dict) -> str:
     if config["partition"] == "noniid" and config.get("alpha") is not None:
         base += f"_a{config['alpha']}"
     base += f"_m{config['malicious']}"
+    if config.get("attack_until", 0):
+        base += f"_u{config['attack_until']}"
     if config["attack"] in ("geotox", "geotox_adaptive") and config.get("tau") is not None:
         base += f"_t{config['tau']}"
     if config.get("seed") is not None:
@@ -148,6 +163,8 @@ def run_experiment(config: Dict, results_dir: Path) -> Tuple[bool, str]:
         cmd.extend(["--alpha", str(config["alpha"])])
     if config["attack"] in ("geotox", "geotox_adaptive") and config.get("tau") is not None:
         cmd.extend(["--tau", str(config["tau"])])
+    if config.get("attack_until", 0):
+        cmd.extend(["--attack_until", str(config["attack_until"])])
 
     config_str = (
         f"{config['dataset']}/{config['aggregation']}/{config['attack']}/"

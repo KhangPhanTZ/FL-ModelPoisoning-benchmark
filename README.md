@@ -75,6 +75,7 @@ python run_experiments.py
 | `--tau` | Float | GeoTox stealth: target cosine with benign mean (0..1) |
 | `--mask_ratio` | Float | GeoTox durability: fraction of low-importance coords kept |
 | `--adaptive_max_scale` | Float | GeoTox-Adaptive: max scale searched vs the defense |
+| `--attack_until` | Integer | Durability: last round the attack is active (0 = always) |
 | `--alpha` | Float | Dirichlet alpha for non-IID (default: 0.5) |
 | `--root_size` | Integer | Clean root-set size for FLTrust (default: 100) |
 | `--rounds` | Integer | Number of FL rounds (default: 50) |
@@ -164,8 +165,18 @@ python3 analyze_results.py --plot     # also save trade-off PNG (needs matplotli
 ```
 
 This reads each `results/*.csv` with its `*_config.txt` sidecar, averages the
-last rounds, and prints the GeoTox **Evasion<->ASR trade-off** table (RQ1) and
-the non-IID **alpha-sensitivity** table (RQ2).
+last rounds, and prints the GeoTox **Evasion<->ASR trade-off** table (RQ1), the
+non-IID **alpha-sensitivity** table (RQ2), and the **backdoor durability** table
+(RQ3: ASR retention after the attacker leaves).
+
+For durability runs, let the attacker leave partway through, e.g.:
+
+```bash
+python main.py --attack geotox --attack_until 25 --rounds 50 --malicious 4 ...
+```
+
+or enable `DURABILITY_UNTIL` at the top of `run_experiments.py` to add a
+durability sweep to the grid.
 
 ## Testing
 

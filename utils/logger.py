@@ -26,6 +26,7 @@ class FLLogger:
         alpha: float = None,
         seed: int = None,
         tau: float = None,
+        attack_until: int = 0,
     ):
         """
         Initialize the logger.
@@ -51,6 +52,7 @@ class FLLogger:
         self.alpha = alpha
         self.seed = seed
         self.tau = tau
+        self.attack_until = attack_until
 
         # Create results directory if it doesn't exist
         self.results_dir.mkdir(parents=True, exist_ok=True)
@@ -82,6 +84,9 @@ class FLLogger:
         if self.partition == "noniid" and self.alpha is not None:
             base += f"_a{self.alpha}"
         base += f"_m{self.malicious}"
+        # Durability runs: encode the round the attacker leaves.
+        if self.attack_until and self.attack_until > 0:
+            base += f"_u{self.attack_until}"
         # GeoTox sweeps tau; encode it so the trade-off runs do not collide.
         if self.attack in ("geotox", "geotox_adaptive") and self.tau is not None:
             base += f"_t{self.tau}"
@@ -197,6 +202,7 @@ def create_logger(args, skip_existing: bool = False) -> FLLogger:
         alpha=getattr(args, "alpha", None),
         seed=getattr(args, "seed", None),
         tau=getattr(args, "tau", None),
+        attack_until=getattr(args, "attack_until", 0),
     )
 
     # Log configuration
@@ -223,6 +229,8 @@ def create_logger(args, skip_existing: bool = False) -> FLLogger:
     if args.attack in ("geotox", "geotox_adaptive"):
         config["tau"] = getattr(args, "tau", None)
         config["mask_ratio"] = getattr(args, "mask_ratio", None)
+    if getattr(args, "attack_until", 0):
+        config["attack_until"] = args.attack_until
 
     logger.log_config(config)
 

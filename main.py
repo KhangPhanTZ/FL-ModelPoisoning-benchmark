@@ -19,6 +19,7 @@ from data.mnist import partition_data, get_test_loader, print_partition_stats
 from client.client import FederatedClient
 from server.server import FederatedServer
 from utils.logger import create_logger
+from utils.schedule import attack_active
 
 
 def parse_args():
@@ -62,6 +63,14 @@ def parse_args():
         type=float,
         default=5.0,
         help="GeoTox-Adaptive: max scale searched against the defense (default: 5.0)"
+    )
+
+    parser.add_argument(
+        "--attack_until",
+        type=int,
+        default=0,
+        help="Durability: last round the attack is active (0 = always; >0 lets "
+             "the attacker leave so backdoor decay/durability can be measured)"
     )
 
     parser.add_argument(
@@ -277,7 +286,8 @@ def main():
     for round_num in range(1, args.rounds + 1):
         selected_clients = server.select_clients(args.clients_per_round)
 
-        evasion_rate = server.train_round(selected_clients, args.local_epochs)
+        active = attack_active(round_num, args.attack_until)
+        evasion_rate = server.train_round(selected_clients, args.local_epochs, attack_active=active)
 
         loss, accuracy = server.evaluate(test_loader)
         asr = None

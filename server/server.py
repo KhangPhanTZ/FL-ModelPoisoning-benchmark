@@ -80,10 +80,18 @@ class FederatedServer:
     def train_round(
         self,
         selected_clients: List[FederatedClient],
-        local_epochs: int = 1
+        local_epochs: int = 1,
+        attack_active: bool = True
     ) -> Optional[float]:
         """
         Execute one round of federated training (in update space).
+
+        Args:
+            selected_clients: Clients participating this round.
+            local_epochs: Local training epochs.
+            attack_active: If False, malicious clients train cleanly and no
+                attack shaping is applied (durability phase after the attacker
+                leaves).
 
         Returns:
             The Evasion Rate for this round: the fraction of malicious clients
@@ -101,7 +109,7 @@ class FederatedServer:
         }
 
         for idx, client in enumerate(selected_clients):
-            local_weights = client.train(self.global_model, local_epochs)
+            local_weights = client.train(self.global_model, local_epochs, poison=attack_active)
             # Update space: u_i = w_local_i - w_global
             update = {
                 key: local_weights[key].float() - global_weights[key]
@@ -116,6 +124,8 @@ class FederatedServer:
         # GeoTox-Adaptive reuses the GeoTox shaping, then (below) tunes its
         # magnitude against the known defense. Map it to the base attack here.
         base_attack = "geotox" if self.attack_type == "geotox_adaptive" else self.attack_type
+        if not attack_active:
+            base_attack = "none"  # attacker has left: behave benignly
 
         # Apply the attack to the malicious clients' updates.
         if malicious_indices and base_attack != "none":
@@ -136,7 +146,7 @@ class FederatedServer:
 
         # GeoTox-Adaptive (white-box, omniscient upper bound): scale the shaped
         # malicious update to the defense's acceptance boundary.
-        if self.attack_type == "geotox_adaptive" and malicious_indices:
+        if self.attack_type == "geotox_adaptive" and malicious_indices and attack_active:
             client_updates = self._apply_adaptive_scaling(
                 client_updates, malicious_indices, client_data_sizes, server_update
             )

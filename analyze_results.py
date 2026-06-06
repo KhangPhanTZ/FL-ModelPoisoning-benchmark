@@ -63,6 +63,44 @@ def final_metrics(csv_path: Path, last: int) -> Dict[str, Optional[float]]:
     }
 
 
+def durability_metrics(csv_path: Path, attack_until: int) -> Dict[str, Optional[float]]:
+    """
+    Backdoor durability: ASR at the round the attacker leaves vs the final ASR.
+
+    retention = 100 * asr_final / asr_at_stop (how much backdoor survives after
+    the attacker stops participating).
+    """
+    rows = list(csv.DictReader(csv_path.open()))
+
+    def asr_of(row) -> Optional[float]:
+        v = row.get("asr", "")
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            return None
+
+    asr_at_stop = None
+    for r in rows:
+        try:
+            if int(float(r.get("round", "nan"))) == attack_until:
+                asr_at_stop = asr_of(r)
+                break
+        except (ValueError, TypeError):
+            continue
+
+    asr_final = None
+    for r in reversed(rows):
+        a = asr_of(r)
+        if a is not None:
+            asr_final = a
+            break
+
+    retention = None
+    if asr_at_stop is not None and asr_at_stop > 1e-9 and asr_final is not None:
+        retention = 100.0 * asr_final / asr_at_stop
+    return {"asr_at_stop": asr_at_stop, "asr_final": asr_final, "retention": retention}
+
+
 def collect(results_dir: Path, last: int) -> List[Dict]:
     """Build one record per (result csv + config) pair."""
     records = []
@@ -72,7 +110,11 @@ def collect(results_dir: Path, last: int) -> List[Dict]:
             continue  # skip summary / orphan CSVs
         cfg = parse_config(cfg_path)
         m = final_metrics(csv_path, last)
-        records.append({
+        try:
+            attack_until = int(cfg.get("attack_until", "0"))
+        except ValueError:
+            attack_until = 0
+        rec = {
             "dataset": cfg.get("dataset", "mnist"),
             "aggregation": cfg.get("aggregation", ""),
             "attack": cfg.get("attack", ""),
@@ -81,17 +123,26 @@ def collect(results_dir: Path, last: int) -> List[Dict]:
             "malicious": cfg.get("malicious", ""),
             "tau": cfg.get("tau", ""),
             "seed": cfg.get("seed", ""),
+            "attack_until": attack_until,
             "accuracy": m["accuracy"],
             "asr": m["asr"],
             "evasion": m["evasion"],
             "rounds": m["rounds"],
-        })
+            "asr_at_stop": None,
+            "retention": None,
+        }
+        if attack_until > 0:
+            d = durability_metrics(csv_path, attack_until)
+            rec["asr_at_stop"] = d["asr_at_stop"]
+            rec["retention"] = d["retention"]
+        records.append(rec)
     return records
 
 
 def write_summary(records: List[Dict], out_path: Path) -> None:
     cols = ["dataset", "aggregation", "attack", "partition", "alpha",
-            "malicious", "tau", "seed", "accuracy", "asr", "evasion", "rounds"]
+            "malicious", "tau", "seed", "attack_until", "accuracy", "asr",
+            "evasion", "asr_at_stop", "retention", "rounds"]
     with out_path.open("w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
@@ -138,6 +189,23 @@ def print_alpha_sensitivity(records: List[Dict]) -> None:
         print(f"{r['dataset']:13} {r['aggregation']:9} {r['attack']:16} "
               f"{str(r['malicious']):>2} {str(r['tau']):>4} {str(r['alpha']):>5} "
               f"| {_fmt(r['asr'])} {_fmt(r['evasion'])}")
+
+
+def print_durability(records: List[Dict]) -> None:
+    """Backdoor durability (RQ3): ASR retention after the attacker leaves."""
+    dur = [r for r in records if r.get("attack_until", 0) and r["attack_until"] > 0]
+    if not dur:
+        print("\n[durability] no durability runs (attack_until>0) found.")
+        return
+    print("\n=== Backdoor durability after the attacker leaves (RQ3) ===")
+    print(f"{'dataset':13} {'agg':9} {'attack':16} {'m':>2} {'tau':>4} "
+          f"{'until':>5} | {'ASR@stop':>8} {'ASR_final':>9} {'retain%':>7}")
+    keyf = lambda r: (r["dataset"], r["aggregation"], r["attack"],
+                      r["malicious"], _taukey(r["tau"]))
+    for r in sorted(dur, key=keyf):
+        print(f"{r['dataset']:13} {r['aggregation']:9} {r['attack']:16} "
+              f"{str(r['malicious']):>2} {str(r['tau']):>4} {str(r['attack_until']):>5} "
+              f"| {_fmt(r['asr_at_stop'])} {_fmt(r['asr']):>9} {_fmt(r['retention'])}")
 
 
 def _taukey(t):
@@ -202,6 +270,7 @@ def main() -> int:
 
     print_tradeoff(records)
     print_alpha_sensitivity(records)
+    print_durability(records)
     if args.plot:
         maybe_plot(records, results_dir)
     return 0

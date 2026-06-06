@@ -76,6 +76,7 @@ def test_adaptive_result_is_accepted_at_boundary():
     val = updates[0]["w"][0].item()
     assert 1.0 < val < 5.0, val
 
+
 def test_analyze_collects_final_metrics():
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)

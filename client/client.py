@@ -39,9 +39,18 @@ class FederatedClient:
     def train(
         self,
         global_model: nn.Module,
-        local_epochs: int = 1
+        local_epochs: int = 1,
+        poison: bool = True
     ) -> Dict[str, torch.Tensor]:
-        """Train local model and return model updates."""
+        """
+        Train local model and return model updates.
+
+        Args:
+            global_model: Current global model to start from.
+            local_epochs: Local training epochs.
+            poison: If False, this client trains cleanly even if malicious
+                (used in durability runs after the attacker "leaves").
+        """
         local_model = copy.deepcopy(global_model)
         local_model.to(self.device)
         local_model.train()
@@ -62,7 +71,7 @@ class FederatedClient:
                 # do not use data poisoning.  Model Replacement (Bagdasaryan
                 # et al., 2020) and GeoTox both train on triggered data so the
                 # local update carries a backdoor signal.
-                if self.is_malicious and self.attack_type in ("model_replacement", "geotox", "geotox_adaptive"):
+                if poison and self.is_malicious and self.attack_type in ("model_replacement", "geotox", "geotox_adaptive"):
                     from data.backdoor import create_poisoned_batch
                     data, target = create_poisoned_batch(
                         data, target,
