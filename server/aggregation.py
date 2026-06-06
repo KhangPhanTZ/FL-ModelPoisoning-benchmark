@@ -267,8 +267,12 @@ def norm_clip(
     clipped = []
     weights = []
     for u, size, norm in zip(updates, data_sizes, norms):
-        scale = min(1.0, bound / (norm.item() + 1e-12))
-        clipped.append(scale < 1.0)
+        n = norm.item()
+        if n > bound:
+            scale, was_clipped = bound / n, True
+        else:
+            scale, was_clipped = 1.0, False
+        clipped.append(was_clipped)
         w = size / total
         weights.append(w)
         for key in aggregated:
