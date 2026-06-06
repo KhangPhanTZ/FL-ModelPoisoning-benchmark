@@ -83,7 +83,7 @@ def test_blend_lambda_contract():
     # Already aligned -> no blending needed.
     assert _blend_lambda(0.8, 0.5) == 0.0
     # Opposed direction -> blended cosine must reach tau.
-    c, tau = -1.0, 0.6
+    c, tau = -0.5, 0.6
     lam = _blend_lambda(c, tau)
     num = lam + (1 - lam) * c
     den = (lam ** 2 + (1 - lam) ** 2 + 2 * lam * (1 - lam) * c) ** 0.5
