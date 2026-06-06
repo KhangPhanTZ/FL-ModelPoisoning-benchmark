@@ -29,7 +29,9 @@ from typing import List, Tuple, Dict
 
 # Experiment configurations
 DATASETS = ["mnist", "fashion_mnist"]
-AGGREGATIONS = ["mean", "median", "krum", "fltrust"]
+# Defense gauntlet. Other available methods: 'multi_krum', 'bulyan',
+# 'trimmed_mean', 'norm_clip' -- add them here to widen the sweep.
+AGGREGATIONS = ["mean", "median", "krum", "fltrust", "flame"]
 ATTACKS = ["lie", "minmax", "model_replacement"]
 MALICIOUS_COUNTS = [2, 4, 6]
 SEEDS = [42]  # add more seeds (e.g. [42, 1, 7]) for mean +/- std reporting

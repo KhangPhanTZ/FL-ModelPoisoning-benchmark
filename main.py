@@ -32,7 +32,8 @@ def parse_args():
         "--aggregation",
         type=str,
         default="mean",
-        choices=["mean", "median", "krum", "multi_krum", "bulyan", "fltrust"],
+        choices=["mean", "median", "krum", "multi_krum", "bulyan", "fltrust",
+                 "trimmed_mean", "norm_clip", "flame"],
         help="Aggregation method (default: mean)"
     )
 

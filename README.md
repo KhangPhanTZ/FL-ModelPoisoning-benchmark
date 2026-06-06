@@ -67,7 +67,7 @@ python run_experiments.py
 | Argument | Options | Description |
 |----------|---------|-------------|
 | `--dataset` | `mnist`, `fashion_mnist` | Dataset (default: mnist) |
-| `--aggregation` | `mean`, `median`, `krum`, `multi_krum`, `bulyan`, `fltrust` | Aggregation method |
+| `--aggregation` | `mean`, `median`, `krum`, `multi_krum`, `bulyan`, `fltrust`, `trimmed_mean`, `norm_clip`, `flame` | Aggregation method |
 | `--attack` | `none`, `lie`, `minmax`, `model_replacement`, `geotox`, `geotox_adaptive` | Attack type |
 | `--partition` | `iid`, `noniid` | Data distribution |
 | `--malicious` | Integer | Number of malicious clients |
@@ -115,6 +115,9 @@ operating at the defense's acceptance boundary.
 | **Multi-Krum** | Selects k closest updates and averages |
 | **Bulyan** | Krum selection + trimmed mean |
 | **FLTrust** | Cosine-similarity trust weighting against a clean **server root dataset** (set via `--root_size`); falls back to the coordinate-wise median reference only when no root set is provided |
+| **Trimmed-Mean** | Coordinate-wise mean after dropping the `f` extremes each side (Yin et al., 2018) |
+| **Norm-clip** | FedAvg after clipping each update to the median norm (tests GeoTox magnitude stealth) |
+| **FLAME** | FLAME-style (Nguyen et al., 2022): cosine-distance majority filtering + median-norm clipping + Gaussian noise (HDBSCAN replaced by a dependency-free majority-core selection) |
 
 ## Datasets
 
