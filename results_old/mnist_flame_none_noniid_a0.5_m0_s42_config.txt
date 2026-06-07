@@ -1,0 +1,18 @@
+==================================================
+Experiment Configuration
+==================================================
+dataset: mnist
+aggregation: flame
+attack: none
+partition: noniid
+num_clients: 20
+clients_per_round: 10
+malicious: 0
+rounds: 20
+local_epochs: 1
+batch_size: 32
+learning_rate: 0.01
+seed: 42
+model: lenet
+alpha: 0.5
+==================================================

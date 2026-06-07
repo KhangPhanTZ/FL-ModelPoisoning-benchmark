@@ -11,13 +11,14 @@ import sys
 import random
 import numpy as np
 import torch
-from tqdm import tqdm
 
 from models.lenet import get_model
-from data.mnist import load_mnist, partition_data, get_test_loader, print_partition_stats
+from data.datasets import load_dataset, build_root_loader, available_datasets
+from data.mnist import partition_data, get_test_loader, print_partition_stats
 from client.client import FederatedClient
 from server.server import FederatedServer
 from utils.logger import create_logger
+from utils.schedule import attack_active
 
 
 def parse_args():
@@ -30,7 +31,8 @@ def parse_args():
         "--aggregation",
         type=str,
         default="mean",
-        choices=["mean", "median", "krum", "multi_krum", "bulyan", "fltrust"],
+        choices=["mean", "median", "krum", "multi_krum", "bulyan", "fltrust",
+                 "trimmed_mean", "norm_clip", "flame"],
         help="Aggregation method (default: mean)"
     )
 
@@ -38,8 +40,39 @@ def parse_args():
         "--attack",
         type=str,
         default="none",
-        choices=["none", "lie", "minmax", "model_replacement"],
+        choices=["none", "lie", "minmax", "model_replacement", "geotox", "geotox_adaptive"],
         help="Attack type (default: none)"
+    )
+
+    parser.add_argument(
+        "--tau",
+        type=float,
+        default=0.5,
+        help="GeoTox stealth: target cosine alignment with benign mean (0..1)"
+    )
+
+    parser.add_argument(
+        "--mask_ratio",
+        type=float,
+        default=1.0,
+        help="GeoTox durability (opt-in): fraction of low-importance coords "
+             "kept; 1.0 = masking off (default). <1.0 boosts persistence but "
+             "lowers ASR -- sweep deliberately."
+    )
+
+    parser.add_argument(
+        "--adaptive_max_scale",
+        type=float,
+        default=5.0,
+        help="GeoTox-Adaptive: max scale searched against the defense (default: 5.0)"
+    )
+
+    parser.add_argument(
+        "--attack_until",
+        type=int,
+        default=0,
+        help="Durability: last round the attack is active (0 = always; >0 lets "
+             "the attacker leave so backdoor decay/durability can be measured)"
     )
 
     parser.add_argument(
@@ -101,6 +134,21 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--dataset",
+        type=str,
+        default="mnist",
+        choices=available_datasets(),
+        help="Dataset (default: mnist)"
+    )
+
+    parser.add_argument(
+        "--root_size",
+        type=int,
+        default=500,
+        help="Size of the clean root dataset used by FLTrust (default: 500)"
+    )
+
+    parser.add_argument(
         "--local_epochs",
         type=int,
         default=1,
@@ -146,9 +194,18 @@ def main():
     print("=" * 60)
     print("Federated Learning Configuration")
     print("=" * 60)
+    print(f"Dataset:          {args.dataset}")
     print(f"Model:            {args.model}")
     print(f"Aggregation:      {args.aggregation}")
-    print(f"Attack:           {args.attack}" + (f" (z={args.z})" if args.attack != "none" else ""))
+    if args.attack in ("geotox", "geotox_adaptive"):
+        attack_detail = f" (tau={args.tau}, mask_ratio={args.mask_ratio})"
+        if args.attack == "geotox_adaptive":
+            attack_detail += f" (adaptive<=x{args.adaptive_max_scale})"
+    elif args.attack != "none":
+        attack_detail = f" (z={args.z})"
+    else:
+        attack_detail = ""
+    print(f"Attack:           {args.attack}{attack_detail}")
     print(f"Partition:        {args.partition}" + (f" (alpha={args.alpha})" if args.partition == "noniid" else ""))
     print(f"Total Clients:    {args.num_clients}")
     print(f"Clients/Round:    {args.clients_per_round}")
@@ -165,8 +222,8 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    print("\nLoading MNIST dataset...")
-    train_dataset, test_dataset = load_mnist(data_dir="./data")
+    print(f"\nLoading {args.dataset} dataset...")
+    train_dataset, test_dataset = load_dataset(args.dataset, data_dir="./data")
     print(f"Training samples: {len(train_dataset)}")
     print(f"Test samples: {len(test_dataset)}")
 
@@ -175,6 +232,17 @@ def main():
 
     if args.partition == "noniid":
         print_partition_stats(client_datasets, train_dataset)
+
+    # FLTrust needs a trusted clean root set held by the server.
+    root_loader = None
+    if args.aggregation == "fltrust":
+        root_loader = build_root_loader(
+            train_dataset,
+            root_size=args.root_size,
+            batch_size=args.batch_size,
+            seed=args.seed,
+        )
+        print(f"FLTrust root dataset: {args.root_size} clean samples")
 
     print("Creating clients...")
     clients = []
@@ -200,7 +268,12 @@ def main():
         device=device,
         aggregation_method=args.aggregation,
         attack_type=args.attack,
-        attack_z=args.z
+        attack_z=args.z,
+        root_loader=root_loader,
+        learning_rate=args.lr,
+        attack_tau=args.tau,
+        attack_mask_ratio=args.mask_ratio,
+        attack_adaptive_max_scale=args.adaptive_max_scale,
     )
 
     test_loader = get_test_loader(test_dataset)
@@ -215,15 +288,17 @@ def main():
     for round_num in range(1, args.rounds + 1):
         selected_clients = server.select_clients(args.clients_per_round)
 
-        evasion_rate = server.train_round(selected_clients, args.local_epochs)
+        active = attack_active(round_num, args.attack_until)
+        evasion_rate = server.train_round(selected_clients, args.local_epochs, attack_active=active)
 
         loss, accuracy = server.evaluate(test_loader)
         asr = None
 
         # ASR is a backdoor metric and is only meaningful for the backdoor
-        # (model_replacement) attack; untargeted attacks (LIE / Min-Max) are
-        # reported via the accuracy drop versus the `none` baseline instead.
-        if args.attack == "model_replacement" and args.malicious > 0:
+        # attacks (model_replacement, geotox); untargeted attacks (LIE /
+        # Min-Max) are reported via the accuracy drop versus the `none`
+        # baseline instead.
+        if args.attack in ("model_replacement", "geotox", "geotox_adaptive") and args.malicious > 0:
             asr = server.compute_asr(test_loader, target_class=7)
 
         line = f"Round {round_num:3d} | Loss: {loss:.4f} | Accuracy: {accuracy:.2f}%"

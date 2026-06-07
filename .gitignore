@@ -67,3 +67,8 @@ results/*_config.txt
 
 # Data directory (downloaded separately)
 data/MNIST/
+
+# Quickstart archives, test cache, extra dataset downloads
+results_archive_*/
+.pytest_cache/
+data/FashionMNIST/

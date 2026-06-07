@@ -1,0 +1,21 @@
+==================================================
+Experiment Configuration
+==================================================
+dataset: mnist
+aggregation: flame
+attack: geotox
+partition: noniid
+num_clients: 20
+clients_per_round: 10
+malicious: 4
+rounds: 20
+local_epochs: 1
+batch_size: 32
+learning_rate: 0.01
+seed: 42
+model: lenet
+attack_z: 1.0
+alpha: 0.5
+tau: 0.3
+mask_ratio: 0.7
+==================================================

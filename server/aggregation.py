@@ -204,6 +204,148 @@ def bulyan(
     return aggregated, info
 
 
+def _unflatten_like(reference: Update, flat: torch.Tensor) -> Update:
+    """Reshape a flat vector back into an update dict matching ``reference``."""
+    out, offset = {}, 0
+    for key, ref in reference.items():
+        numel = ref.numel()
+        out[key] = flat[offset:offset + numel].reshape(ref.shape).clone()
+        offset += numel
+    return out
+
+
+def trimmed_mean(
+    updates: List[Update],
+    data_sizes: List[int],
+    num_byzantine: int = 0,
+) -> Tuple[Update, AggregationInfo]:
+    """Coordinate-wise trimmed mean (Yin et al., 2018): drop beta=f extremes."""
+    if not updates:
+        raise ValueError("No client updates provided for aggregation")
+
+    n = len(updates)
+    beta = min(num_byzantine, (n - 1) // 2)
+
+    aggregated = {}
+    for key in updates[0]:
+        stacked = torch.stack([u[key].float() for u in updates])
+        if beta > 0 and n > 2 * beta:
+            sorted_vals, _ = torch.sort(stacked, dim=0)
+            aggregated[key] = sorted_vals[beta:-beta].mean(dim=0)
+        else:
+            aggregated[key] = stacked.mean(dim=0)
+
+    info = AggregationInfo(
+        selected=[True] * n,
+        weights=[1.0 / n] * n,
+        selection_type="coordinate_wise",
+        extra={"trim": beta},
+    )
+    return aggregated, info
+
+
+def norm_clip(
+    updates: List[Update],
+    data_sizes: List[int],
+    clip_norm: float = None,
+) -> Tuple[Update, AggregationInfo]:
+    """
+    Norm-bounded FedAvg: clip each update to ``clip_norm`` (default = median
+    update norm), then take the weighted average.
+
+    This is the natural defense to test GeoTox's magnitude stealth: GeoTox sits
+    at the median benign norm, so it is (by construction) not clipped.
+    """
+    if not updates:
+        raise ValueError("No client updates provided for aggregation")
+
+    norms = [torch.norm(_flatten(u)) for u in updates]
+    bound = clip_norm if clip_norm is not None else torch.stack(norms).median().item()
+    total = sum(data_sizes)
+
+    aggregated = _zeros_like_update(updates[0])
+    clipped = []
+    weights = []
+    for u, size, norm in zip(updates, data_sizes, norms):
+        n = norm.item()
+        if n > bound:
+            scale, was_clipped = bound / n, True
+        else:
+            scale, was_clipped = 1.0, False
+        clipped.append(was_clipped)
+        w = size / total
+        weights.append(w)
+        for key in aggregated:
+            aggregated[key] += w * scale * u[key].float()
+
+    info = AggregationInfo(
+        selected=[True] * len(updates),  # norm-clip limits but never rejects
+        weights=weights,
+        extra={"clip_norm": bound, "clipped": clipped},
+    )
+    return aggregated, info
+
+
+def flame(
+    updates: List[Update],
+    data_sizes: List[int],
+    num_byzantine: int = 0,
+    noise_lambda: float = 0.001,
+) -> Tuple[Update, AggregationInfo]:
+    """
+    FLAME-style defense (Nguyen et al., USENIX Security 2022).
+
+    Three ingredients: (1) cosine-distance outlier filtering to admit the
+    benign majority, (2) clip admitted updates to the median admitted norm,
+    (3) add Gaussian noise scaled by that median norm.
+
+    Faithfulness note: the paper uses HDBSCAN for step (1). To stay
+    dependency-free we admit the ``n - f`` updates with the smallest total
+    cosine distance to the others (the dense majority core); this preserves
+    FLAME's cosine-clustering + clip + noise structure. Set ``noise_lambda=0``
+    for deterministic tests.
+    """
+    if not updates:
+        raise ValueError("No client updates provided for aggregation")
+
+    n = len(updates)
+    if n == 1:
+        return updates[0], AggregationInfo(selected=[True], weights=[1.0])
+
+    flat = torch.stack([_flatten(u) for u in updates])
+    unit = flat / flat.norm(dim=1, keepdim=True).clamp_min(1e-12)
+    cos_dist = 1.0 - unit @ unit.t()          # pairwise cosine distance
+    centrality = cos_dist.sum(dim=1)          # smaller = more central
+
+    f = min(num_byzantine, n - 1)
+    k_admit = max(1, n - f)
+    admitted = torch.argsort(centrality)[:k_admit].tolist()
+    admitted_set = set(admitted)
+
+    # Clip admitted updates to their median norm, then average.
+    admitted_norms = torch.stack([flat[i].norm() for i in admitted])
+    S = admitted_norms.median()
+    agg_flat = torch.zeros_like(flat[0])
+    for i in admitted:
+        norm = flat[i].norm().clamp_min(1e-12)
+        scale = torch.clamp(S / norm, max=1.0)
+        agg_flat = agg_flat + scale * flat[i]
+    agg_flat = agg_flat / len(admitted)
+
+    if noise_lambda and noise_lambda > 0:
+        agg_flat = agg_flat + noise_lambda * S * torch.randn_like(agg_flat)
+
+    aggregated = _unflatten_like(updates[0], agg_flat)
+    selected = [i in admitted_set for i in range(n)]
+    weights = [1.0 / k_admit if i in admitted_set else 0.0 for i in range(n)]
+    info = AggregationInfo(
+        selected=selected,
+        weights=weights,
+        extra={"admitted": admitted, "median_norm": S.item()},
+    )
+    return aggregated, info
+
+
 def fltrust(
     updates: List[Update],
     data_sizes: List[int],
@@ -300,8 +442,16 @@ def aggregate(
         return bulyan(updates, data_sizes, kwargs.get("num_byzantine", default_byz))
     if aggregation_method == "fltrust":
         return fltrust(updates, data_sizes, kwargs.get("server_update"))
+    if aggregation_method == "trimmed_mean":
+        return trimmed_mean(updates, data_sizes, kwargs.get("num_byzantine", default_byz))
+    if aggregation_method == "norm_clip":
+        return norm_clip(updates, data_sizes, kwargs.get("clip_norm"))
+    if aggregation_method == "flame":
+        return flame(updates, data_sizes, kwargs.get("num_byzantine", default_byz),
+                     noise_lambda=kwargs.get("noise_lambda", 0.001))
 
     raise ValueError(
-        f"Unknown aggregation method: {aggregation_method}. "
-        f"Available: ['mean', 'median', 'krum', 'multi_krum', 'bulyan', 'fltrust']"
+        f"Unknown aggregation method: {aggregation_method}. Available: "
+        f"['mean', 'median', 'krum', 'multi_krum', 'bulyan', 'fltrust', "
+        f"'trimmed_mean', 'norm_clip', 'flame']"
     )

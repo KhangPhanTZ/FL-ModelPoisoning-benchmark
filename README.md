@@ -66,15 +66,22 @@ python run_experiments.py
 
 | Argument | Options | Description |
 |----------|---------|-------------|
-| `--aggregation` | `mean`, `median`, `krum`, `multi_krum`, `bulyan`, `fltrust` | Aggregation method |
-| `--attack` | `none`, `lie`, `minmax`, `model_replacement` | Attack type |
+| `--dataset` | `mnist`, `fashion_mnist` | Dataset (default: mnist) |
+| `--aggregation` | `mean`, `median`, `krum`, `multi_krum`, `bulyan`, `fltrust`, `trimmed_mean`, `norm_clip`, `flame` | Aggregation method |
+| `--attack` | `none`, `lie`, `minmax`, `model_replacement`, `geotox`, `geotox_adaptive` | Attack type |
 | `--partition` | `iid`, `noniid` | Data distribution |
 | `--malicious` | Integer | Number of malicious clients |
-| `--z` | Float | Attack strength parameter |
+| `--z` | Float | Attack strength parameter (LIE/Min-Max/Model-Replacement) |
+| `--tau` | Float | GeoTox stealth: target cosine with benign mean (0..1) |
+| `--mask_ratio` | Float | GeoTox durability (opt-in): low-importance coords kept; **1.0 = off (default)**. <1.0 boosts persistence but lowers ASR |
+| `--adaptive_max_scale` | Float | GeoTox-Adaptive: max scale searched vs the defense |
+| `--attack_until` | Integer | Durability: last round the attack is active (0 = always) |
 | `--alpha` | Float | Dirichlet alpha for non-IID (default: 0.5) |
+| `--root_size` | Integer | Clean root-set size for FLTrust (default: 100) |
 | `--rounds` | Integer | Number of FL rounds (default: 50) |
 | `--num_clients` | Integer | Total clients (default: 20) |
 | `--clients_per_round` | Integer | Clients sampled per round (default: 10) |
+| `--seed` | Integer | Random seed (default: 42) |
 
 ## Attacks
 
@@ -87,6 +94,17 @@ Maximizes distance from benign updates by perturbing in the opposite direction.
 ### Model Replacement
 Scales malicious updates to dominate after FedAvg aggregation.
 
+### GeoTox (this work)
+Multi-constraint stealthy + durable backdoor: hides the backdoor in
+low-importance coordinates (durability), blends toward the benign mean until
+`cos >= tau` (directional stealth), and rescales to the median benign norm
+(magnitude stealth). `--tau` is the Evasion<->ASR trade-off knob.
+
+### GeoTox-Adaptive (this work)
+White-box, omniscient upper bound: after GeoTox shaping, binary-searches the
+largest magnitude the *known* defense still accepts (`--adaptive_max_scale`),
+operating at the defense's acceptance boundary.
+
 ## Defenses
 
 | Defense | Description |
@@ -96,12 +114,21 @@ Scales malicious updates to dominate after FedAvg aggregation.
 | **Krum** | Selects update closest to others |
 | **Multi-Krum** | Selects k closest updates and averages |
 | **Bulyan** | Krum selection + trimmed mean |
-| **FLTrust** | Cosine similarity-based trust weighting |
+| **FLTrust** | Cosine-similarity trust weighting against a clean **server root dataset** (set via `--root_size`); falls back to the coordinate-wise median reference only when no root set is provided |
+| **Trimmed-Mean** | Coordinate-wise mean after dropping the `f` extremes each side (Yin et al., 2018) |
+| **Norm-clip** | FedAvg after clipping each update to the median norm (tests GeoTox magnitude stealth) |
+| **FLAME** | FLAME-style (Nguyen et al., 2022): cosine-distance majority filtering + median-norm clipping + Gaussian noise (HDBSCAN replaced by a dependency-free majority-core selection) |
+
+## Datasets
+
+`mnist` and `fashion_mnist` are supported (both 1x28x28, 10 classes, so the same
+LeNet works for either). Select with `--dataset`.
 
 ## Results
 
 Experiment results are saved to `results/` as CSV files:
-- Format: `{aggregation}_{attack}_{partition}_m{malicious}.csv`
+- Format: `{dataset}_{aggregation}_{attack}_{partition}[_a{alpha}]_m{malicious}[_s{seed}].csv`
+  (`a{alpha}` only for non-IID; `s{seed}` when a seed is recorded)
 - Columns: `round`, `loss`, `accuracy`, `asr`, `evasion_rate`, `timestamp`
 
 ## Metrics
@@ -124,7 +151,40 @@ defenses measure norms and cosine similarities (on gradients, not raw weights).
 
 ## Configuration Matrix
 
-The benchmark runs 54 configurations:
-- 3 aggregations × 3 attacks × 2 partitions × 3 malicious counts
+`run_experiments.py` sweeps: datasets x aggregations x seeds x partition
+settings (IID + a non-IID **alpha sweep**), and for each it runs a clean `none`
+baseline plus the attack x malicious grid. The lists (`DATASETS`,
+`AGGREGATIONS`, `NONIID_ALPHAS`, `SEEDS`, `MALICIOUS_COUNTS`) are configurable
+at the top of the file - use `--dry-run` to preview the count and trim before
+launching.
+
+## Analysis
+
+After running experiments, aggregate them and print the headline analyses:
+
+```bash
+python3 analyze_results.py            # writes results/summary_metrics.csv
+python3 analyze_results.py --plot     # also save trade-off PNG (needs matplotlib)
+```
+
+This reads each `results/*.csv` with its `*_config.txt` sidecar, averages the
+last rounds, and prints the GeoTox **Evasion<->ASR trade-off** table (RQ1), the
+non-IID **alpha-sensitivity** table (RQ2), and the **backdoor durability** table
+(RQ3: ASR retention after the attacker leaves).
+
+For durability runs, let the attacker leave partway through, e.g.:
+
+```bash
+python main.py --attack geotox --attack_until 25 --rounds 50 --malicious 4 ...
+```
+
+or enable `DURABILITY_UNTIL` at the top of `run_experiments.py` to add a
+durability sweep to the grid.
+
+## Testing
+
+```bash
+python3 -m pytest tests/ -v        # or: PYTHONPATH=. python3 tests/test_phase0.py
+```
 
 
