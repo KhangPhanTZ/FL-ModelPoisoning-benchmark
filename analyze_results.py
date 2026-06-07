@@ -265,6 +265,40 @@ def print_seed_aggregate(records: List[Dict], out_path: Path) -> None:
               f"{asr:>16} {_fmt(g['evasion_mean'])} {_fmt(g['accuracy_mean'])}")
 
 
+def print_attack_comparison(records: List[Dict]) -> None:
+    """Head-to-head: best ASR (mean+/-std) of each attack against each defense.
+
+    For tau-swept attacks (GeoTox) the best tau per defense is reported (the
+    strongest the attack achieves), giving a fair attack-vs-attack comparison.
+    """
+    agg = [g for g in aggregate_over_seeds(records)
+           if not g.get("attack_until") and g["attack"] not in ("", "none")
+           and g["asr_mean"] is not None]
+    if not agg:
+        print("\n[comparison] no attack runs found.")
+        return
+    order = ["lie", "minmax", "model_replacement", "geotox", "geotox_adaptive"]
+    present = [a for a in order if any(g["attack"] == a for g in agg)]
+    defenses = sorted(set(g["aggregation"] for g in agg))
+
+    best: Dict[tuple, Dict] = {}
+    for g in agg:
+        k = (g["aggregation"], g["attack"])
+        if k not in best or g["asr_mean"] > best[k]["asr_mean"]:
+            best[k] = g
+
+    print("\n=== Attack comparison: best ASR mean+/-std by defense "
+          "(GeoTox = best tau) ===")
+    print(f"{'defense':10} | " + " ".join(f"{a:>16}" for a in present))
+    for d in defenses:
+        cells = []
+        for a in present:
+            g = best.get((d, a))
+            cells.append(f"{g['asr_mean']:.1f}+/-{g['asr_std']:.1f}"
+                         if g else "-")
+        print(f"{d:10} | " + " ".join(f"{c:>16}" for c in cells))
+
+
 def print_durability(records: List[Dict]) -> None:
     """Backdoor durability (RQ3): ASR retention after the attacker leaves."""
     dur = [r for r in records if r.get("attack_until", 0) and r["attack_until"] > 0]
@@ -344,6 +378,7 @@ def main() -> int:
 
     print_tradeoff(records)
     print_alpha_sensitivity(records)
+    print_attack_comparison(records)
     print_durability(records)
     print_seed_aggregate(records, results_dir / "summary_by_config.csv")
     if args.plot:
