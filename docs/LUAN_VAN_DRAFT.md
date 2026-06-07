@@ -244,21 +244,46 @@ ASR **giảm dần khi $\alpha$ tăng** (0.1→1.0), *ủng hộ định hướn
 mạnh, kẻ tấn công càng dễ ẩn náu". Tuy phương sai lớn và điểm IID chưa khớp đơn
 điệu nên đây là **bằng chứng định hướng**, cần thêm seed/vòng để khẳng định.
 
-## 4.5. So sánh GeoTox với các tấn công nền (best ASR theo phòng thủ)
+## 4.5. So sánh GeoTox với các tấn công nền
 
-> Chạy `python3 run_baselines.py` rồi `python3 analyze_results.py` (bảng *Attack
-> comparison*) để điền. Mẫu bảng:
+Để định vị GeoTox so với các tấn công có sẵn, ta chạy chúng dưới **cùng phòng
+thủ** (MNIST, $\alpha=0.5$, 20% độc, 30 vòng, 3 seed). Tấn công **backdoor**
+(targeted) so bằng **ASR**; tấn công **untargeted** (LIE, Min-Max) so bằng mức
+**sụt độ chính xác (MA)** vì chúng không có ASR.
 
-| Phòng thủ | LIE | Min-Max | Model-Repl. | **GeoTox (best τ)** | **GeoTox-Adaptive** |
-|---|---|---|---|---|---|
-| FedAvg | `[CHỜ]` | `[CHỜ]` | `[CHỜ]` | 37.5±37.1 | – |
-| Krum | `[CHỜ]` | `[CHỜ]` | `[CHỜ]` | **97.1±1.3** | – |
-| FLTrust | `[CHỜ]` | `[CHỜ]` | `[CHỜ]` | 0.4±0.1 | – |
-| FLAME | `[CHỜ]` | `[CHỜ]` | `[CHỜ]` | ~42 (±lớn) | 21.3±36.3 |
+**Bảng 4.3 — ASR (best, mean±std %) của tấn công backdoor theo phòng thủ:**
 
-*Mục tiêu lập luận:* cho thấy GeoTox (đặc biệt ở $\tau$ phù hợp / Adaptive) đạt
-ASR **cao hơn hoặc tàng hình hơn** so với LIE/Min-Max/Model-Replacement dưới cùng
-phòng thủ — hoặc nêu trung thực nếu một tấn công nền mạnh hơn ở tình huống nào đó.
+| Phòng thủ | Model-Replacement | **GeoTox (best τ)** |
+|---|---|---|
+| FedAvg (không pt) | 99.8±0.3 | 37.5±37.1 |
+| **Krum** | **0.6±0.3** | **97.1±1.3** |
+| FLTrust | 0.3±0.1 | 0.4±0.1 |
+| FLAME | 96.1±3.1 | 54.7±40.6 |
+
+**Bảng 4.4 — Độ chính xác MA (%) dưới tấn công untargeted:**
+
+| Phòng thủ | Không tấn công | LIE | Min-Max |
+|---|---|---|---|
+| FedAvg | 98.7 | 97.2 | **9.9** |
+| Krum | 93.6 | 93.4 | 93.4 |
+| FLTrust | 97.5 | 97.5 | 97.5 |
+| FLAME | 98.7 | 69.0 | 84.8 |
+
+**Phát hiện chủ lực.** **Krum chặn hoàn toàn Model-Replacement (ASR 0.6±0.3%)
+cũng như LIE/Min-Max (MA gần như không đổi), nhưng KHÔNG chặn được GeoTox (ASR
+97.1±1.3%).** Như vậy GeoTox là tấn công *duy nhất trong các tấn công khảo sát*
+xuyên thủng một phòng thủ robust mà mọi tấn công nền đều thất bại — minh chứng
+trực tiếp cho giá trị của tàng hình đa ràng buộc. Độ lệch chuẩn nhỏ (±1.3) cho
+thấy kết quả ổn định và lặp lại được.
+
+**Các nhận xét trung thực khác.** (i) Dưới **FedAvg** (không phòng thủ),
+Model-Replacement (brute-force scaling) đạt 99.8% > GeoTox 37.5% — đúng kỳ vọng:
+GeoTox **hi sinh cường độ để đổi lấy tàng hình**, và sự tàng hình chỉ phát huy
+khi có phòng thủ. (ii) **FLTrust là phòng thủ mạnh nhất**: chặn mọi tấn công (ASR
+≤0.4%, MA nguyên vẹn), kể cả GeoTox. (iii) **FLAME yếu**: thất bại trước cả
+Model-Replacement (96.1±3.1%) lẫn GeoTox (đôi khi), và để LIE/Min-Max làm giảm
+MA. (iv) **Min-Max** kéo MA của FedAvg xuống 9.9% (untargeted hiệu quả) nhưng bị
+Krum/FLTrust vô hiệu hoá.
 
 ## 4.6. RQ3 — Độ bền sau khi kẻ tấn công rời mạng (vòng 15)
 
@@ -284,9 +309,12 @@ lần không cấy được thì retention không đại diện. Kết quả g�
 
 1. **GeoTox / GeoTox-Adaptive** — kỹ thuật model poisoning đa ràng buộc (tàng
    hình hướng + độ lớn, tuỳ chọn bền vững, biến thể thích nghi white-box).
-2. **Đặc trưng hóa đường cong đánh đổi** Evasion↔ASR — chứng minh rõ trên Krum.
-3. **Khảo sát vai trò an ninh của phi-IID** qua quét $\alpha$.
-4. **Khung benchmark tái lập được** (PyTorch, 25+ kiểm thử, script phân tích).
+2. **Phát hiện đối chứng then chốt:** GeoTox **xuyên thủng Krum (ASR 97.1±1.3%)**
+   trong khi các tấn công nền (LIE, Min-Max, Model-Replacement) đều **bị Krum
+   chặn hoàn toàn** — cho thấy giá trị thực của tàng hình đa ràng buộc.
+3. **Đặc trưng hóa đường cong đánh đổi** Evasion↔ASR (rõ trên Krum).
+4. **Khảo sát vai trò an ninh của phi-IID** qua quét $\alpha$.
+5. **Khung benchmark tái lập được** (PyTorch, 25+ kiểm thử, script phân tích).
 
 ## 5.2. Hàm ý cho phòng thủ thế hệ sau
 
