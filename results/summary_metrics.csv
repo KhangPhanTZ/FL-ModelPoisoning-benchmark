@@ -21,3 +21,8 @@ mnist,krum,geotox,noniid,0.5,4,0.3,42,0,91.702,0.45474,0.0,,,20
 mnist,krum,geotox,noniid,0.5,4,0.6,42,0,94.45599999999999,1.37314,12.5,,,20
 mnist,krum,geotox,noniid,0.5,4,0.9,42,0,97.176,1.02542,87.5,,,20
 mnist,krum,none,noniid,0.5,0,,42,0,89.66600000000001,,,,,20
+mnist,mean,geotox,noniid,0.5,4,0.0,42,0,98.676,2.65718,100.0,,,30
+mnist,mean,geotox,noniid,0.5,4,0.0,42,0,98.728,78.37494000000001,100.0,,,30
+mnist,mean,geotox,noniid,0.5,8,0.0,42,0,98.634,99.90416,100.0,,,30
+mnist,mean,model_replacement,noniid,0.5,4,,42,0,98.238,99.93092,100.0,,,30
+mnist,mean,none,noniid,0.5,0,,42,0,98.724,,,,,30

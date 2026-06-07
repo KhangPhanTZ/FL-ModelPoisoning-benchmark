@@ -54,8 +54,10 @@ def parse_args():
     parser.add_argument(
         "--mask_ratio",
         type=float,
-        default=0.7,
-        help="GeoTox durability: fraction of low-importance coords kept (0..1)"
+        default=1.0,
+        help="GeoTox durability (opt-in): fraction of low-importance coords "
+             "kept; 1.0 = masking off (default). <1.0 boosts persistence but "
+             "lowers ASR -- sweep deliberately."
     )
 
     parser.add_argument(

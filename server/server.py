@@ -24,7 +24,7 @@ class FederatedServer:
         root_loader: DataLoader = None,
         learning_rate: float = 0.01,
         attack_tau: float = 0.5,
-        attack_mask_ratio: float = 0.7,
+        attack_mask_ratio: float = 1.0,
         attack_adaptive_max_scale: float = 5.0,
     ):
         self.global_model = global_model.to(device)

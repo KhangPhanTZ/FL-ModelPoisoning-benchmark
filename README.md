@@ -73,7 +73,7 @@ python run_experiments.py
 | `--malicious` | Integer | Number of malicious clients |
 | `--z` | Float | Attack strength parameter (LIE/Min-Max/Model-Replacement) |
 | `--tau` | Float | GeoTox stealth: target cosine with benign mean (0..1) |
-| `--mask_ratio` | Float | GeoTox durability: fraction of low-importance coords kept |
+| `--mask_ratio` | Float | GeoTox durability (opt-in): low-importance coords kept; **1.0 = off (default)**. <1.0 boosts persistence but lowers ASR |
 | `--adaptive_max_scale` | Float | GeoTox-Adaptive: max scale searched vs the defense |
 | `--attack_until` | Integer | Durability: last round the attack is active (0 = always) |
 | `--alpha` | Float | Dirichlet alpha for non-IID (default: 0.5) |

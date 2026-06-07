@@ -198,7 +198,7 @@ def compute_geotox_attack(
     client_updates: List[Dict[str, torch.Tensor]],
     malicious_indices: List[int],
     tau: float = 0.5,
-    mask_ratio: float = 0.7,
+    mask_ratio: float = 1.0,
     eps: float = 1e-8,
 ) -> List[Dict[str, torch.Tensor]]:
     """
@@ -208,10 +208,14 @@ def compute_geotox_attack(
     each malicious update carries a backdoor signal.  GeoTox then shapes that
     raw update to evade several defense families simultaneously:
 
-      1. Durability (Neurotoxin-style): keep the backdoor in the coordinates
-         that benign clients move the LEAST (low |mean benign update|), so
-         honest updates are unlikely to overwrite it.  ``mask_ratio`` is the
-         fraction of (lowest-importance) coordinates retained.
+      1. Durability (Neurotoxin-style, OPT-IN): keep the backdoor in the
+         coordinates that benign clients move the LEAST (low |mean benign
+         update|).  ``mask_ratio`` is the fraction of (lowest-importance)
+         coordinates retained; ``mask_ratio=1.0`` (the default) disables masking.
+         WARNING: aggressive masking (e.g. 0.7) zeros high-importance
+         coordinates and empirically destroys most of the backdoor signal
+         (ASR collapses) -- it trades attack success for persistence and should
+         be swept deliberately, not left on by default.
       2. Directional stealth: blend the masked direction toward the benign mean
          direction until cos(update, benign_mean) >= ``tau`` -- this is the
          knob that trades stealth (high tau) against backdoor strength.
@@ -323,7 +327,7 @@ def apply_attack(
             client_updates,
             malicious_indices,
             tau=kwargs.get("tau", 0.5),
-            mask_ratio=kwargs.get("mask_ratio", 0.7),
+            mask_ratio=kwargs.get("mask_ratio", 1.0),
         )
 
     raise ValueError(
