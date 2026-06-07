@@ -76,3 +76,4 @@ data/FashionMNIST/
 # Word documents (thesis drafts kept locally only)
 *.doc
 *.docx
+docs/
