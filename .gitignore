@@ -72,3 +72,8 @@ data/MNIST/
 results_archive_*/
 .pytest_cache/
 data/FashionMNIST/
+
+# Word documents (thesis drafts kept locally only)
+*.doc
+*.docx
+docs/
