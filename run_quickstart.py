@@ -28,7 +28,7 @@ CLIENTS_PER_ROUND = 10
 MALICIOUS = 4            # 20%
 SEED = 42
 
-RQ1_DEFENSES = ["krum", "fltrust", "flame"]
+RQ1_DEFENSES = ["mean", "krum", "fltrust", "flame"]
 RQ1_TAUS = [0.0, 0.3, 0.6, 0.9]
 RQ2_ALPHAS = [(("iid", None)), ("noniid", 0.1), ("noniid", 0.3),
               ("noniid", 0.5), ("noniid", 1.0)]

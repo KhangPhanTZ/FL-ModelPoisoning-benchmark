@@ -11,7 +11,6 @@ import sys
 import random
 import numpy as np
 import torch
-from tqdm import tqdm
 
 from models.lenet import get_model
 from data.datasets import load_dataset, build_root_loader, available_datasets
