@@ -156,7 +156,9 @@ def _fmt(x) -> str:
 
 def print_tradeoff(records: List[Dict]) -> None:
     """GeoTox trade-off: ASR / Evasion / Accuracy as tau varies."""
-    geo = [r for r in records if r["attack"] in ("geotox", "geotox_adaptive")]
+    geo = [r for r in records
+           if r["attack"] in ("geotox", "geotox_adaptive")
+           and not r.get("attack_until", 0)]
     if not geo:
         print("\n[trade-off] no GeoTox runs found.")
         return
@@ -176,7 +178,8 @@ def print_tradeoff(records: List[Dict]) -> None:
 def print_alpha_sensitivity(records: List[Dict]) -> None:
     """ASR vs non-IID alpha (RQ2): is non-IID an ally of the attacker?"""
     geo = [r for r in records
-           if r["attack"] in ("geotox", "geotox_adaptive") and r["partition"] == "noniid"]
+           if r["attack"] in ("geotox", "geotox_adaptive")
+           and r["partition"] == "noniid" and not r.get("attack_until", 0)]
     if not geo:
         print("\n[alpha] no non-IID GeoTox runs found.")
         return
