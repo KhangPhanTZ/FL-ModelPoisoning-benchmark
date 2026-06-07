@@ -191,6 +191,68 @@ def print_alpha_sensitivity(records: List[Dict]) -> None:
               f"| {_fmt(r['asr'])} {_fmt(r['evasion'])}")
 
 
+def _stats(values):
+    vals = [v for v in values if isinstance(v, (int, float))]
+    if not vals:
+        return None, None, 0
+    mean = sum(vals) / len(vals)
+    if len(vals) > 1:
+        var = sum((v - mean) ** 2 for v in vals) / (len(vals) - 1)
+        std = var ** 0.5
+    else:
+        std = 0.0
+    return mean, std, len(vals)
+
+
+def aggregate_over_seeds(records: List[Dict]) -> List[Dict]:
+    """Group runs by config (ignoring seed) and average ASR/Evasion/Acc."""
+    groups: Dict[tuple, List[Dict]] = {}
+    for r in records:
+        key = (r["dataset"], r["aggregation"], r["attack"], r["partition"],
+               r["alpha"], r["malicious"], r["tau"], r.get("attack_until", 0))
+        groups.setdefault(key, []).append(r)
+
+    out = []
+    for key, rs in groups.items():
+        asr_m, asr_s, n = _stats([r["asr"] for r in rs])
+        ev_m, ev_s, _ = _stats([r["evasion"] for r in rs])
+        ac_m, _, _ = _stats([r["accuracy"] for r in rs])
+        out.append({
+            "dataset": key[0], "aggregation": key[1], "attack": key[2],
+            "partition": key[3], "alpha": key[4], "malicious": key[5],
+            "tau": key[6], "attack_until": key[7], "n_seeds": n,
+            "asr_mean": asr_m, "asr_std": asr_s, "evasion_mean": ev_m,
+            "evasion_std": ev_s, "accuracy_mean": ac_m,
+        })
+    return out
+
+
+def print_seed_aggregate(records: List[Dict], out_path: Path) -> None:
+    """Print and save the per-config mean +/- std across seeds."""
+    agg = aggregate_over_seeds(records)
+    n_max = max((g["n_seeds"] for g in agg), default=0)
+    cols = ["dataset", "aggregation", "attack", "partition", "alpha",
+            "malicious", "tau", "attack_until", "n_seeds", "asr_mean",
+            "asr_std", "evasion_mean", "evasion_std", "accuracy_mean"]
+    with out_path.open("w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=cols)
+        w.writeheader()
+        for g in agg:
+            w.writerow(g)
+
+    print(f"\n=== Per-config mean +/- std over seeds (n up to {n_max}) -> {out_path.name} ===")
+    print(f"{'agg':9} {'attack':16} {'part':7} {'alpha':5} {'tau':>4} "
+          f"{'n':>2} | {'ASR(mean+/-std)':>16} {'Evas':>6} {'Acc':>6}")
+    keyf = lambda g: (g["aggregation"], g["attack"], g["partition"],
+                      _alphakey(g["alpha"]), _taukey(g["tau"]))
+    for g in sorted(agg, key=keyf):
+        asr = (f"{g['asr_mean']:.1f}+/-{g['asr_std']:.1f}"
+               if g["asr_mean"] is not None else "   -  ")
+        print(f"{g['aggregation']:9} {g['attack']:16} {g['partition']:7} "
+              f"{str(g['alpha']):5} {str(g['tau']):>4} {g['n_seeds']:>2} | "
+              f"{asr:>16} {_fmt(g['evasion_mean'])} {_fmt(g['accuracy_mean'])}")
+
+
 def print_durability(records: List[Dict]) -> None:
     """Backdoor durability (RQ3): ASR retention after the attacker leaves."""
     dur = [r for r in records if r.get("attack_until", 0) and r["attack_until"] > 0]
@@ -271,6 +333,7 @@ def main() -> int:
     print_tradeoff(records)
     print_alpha_sensitivity(records)
     print_durability(records)
+    print_seed_aggregate(records, results_dir / "summary_by_config.csv")
     if args.plot:
         maybe_plot(records, results_dir)
     return 0

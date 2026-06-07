@@ -144,8 +144,8 @@ def parse_args():
     parser.add_argument(
         "--root_size",
         type=int,
-        default=100,
-        help="Size of the clean root dataset used by FLTrust (default: 100)"
+        default=500,
+        help="Size of the clean root dataset used by FLTrust (default: 500)"
     )
 
     parser.add_argument(
