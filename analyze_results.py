@@ -102,40 +102,49 @@ def durability_metrics(csv_path: Path, attack_until: int) -> Dict[str, Optional[
 
 
 def collect(results_dir: Path, last: int) -> List[Dict]:
-    """Build one record per (result csv + config) pair."""
+    """Build one record per (result csv + config) pair.
+
+    Resilient to files being created/moved concurrently (e.g. running this
+    while experiments are still in progress, or during --fresh archiving):
+    any run that raises is skipped rather than crashing the analysis.
+    """
     records = []
     for csv_path in sorted(results_dir.glob("*.csv")):
         cfg_path = csv_path.with_name(f"{csv_path.stem}_config.txt")
         if not cfg_path.exists():
             continue  # skip summary / orphan CSVs
-        cfg = parse_config(cfg_path)
-        m = final_metrics(csv_path, last)
         try:
-            attack_until = int(cfg.get("attack_until", "0"))
-        except ValueError:
-            attack_until = 0
-        rec = {
-            "dataset": cfg.get("dataset", "mnist"),
-            "aggregation": cfg.get("aggregation", ""),
-            "attack": cfg.get("attack", ""),
-            "partition": cfg.get("partition", ""),
-            "alpha": cfg.get("alpha", ""),
-            "malicious": cfg.get("malicious", ""),
-            "tau": cfg.get("tau", ""),
-            "seed": cfg.get("seed", ""),
-            "attack_until": attack_until,
-            "accuracy": m["accuracy"],
-            "asr": m["asr"],
-            "evasion": m["evasion"],
-            "rounds": m["rounds"],
-            "asr_at_stop": None,
-            "retention": None,
-        }
-        if attack_until > 0:
-            d = durability_metrics(csv_path, attack_until)
-            rec["asr_at_stop"] = d["asr_at_stop"]
-            rec["retention"] = d["retention"]
-        records.append(rec)
+            cfg = parse_config(cfg_path)
+            m = final_metrics(csv_path, last)
+            try:
+                attack_until = int(cfg.get("attack_until", "0"))
+            except ValueError:
+                attack_until = 0
+            rec = {
+                "dataset": cfg.get("dataset", "mnist"),
+                "aggregation": cfg.get("aggregation", ""),
+                "attack": cfg.get("attack", ""),
+                "partition": cfg.get("partition", ""),
+                "alpha": cfg.get("alpha", ""),
+                "malicious": cfg.get("malicious", ""),
+                "tau": cfg.get("tau", ""),
+                "seed": cfg.get("seed", ""),
+                "attack_until": attack_until,
+                "accuracy": m["accuracy"],
+                "asr": m["asr"],
+                "evasion": m["evasion"],
+                "rounds": m["rounds"],
+                "asr_at_stop": None,
+                "retention": None,
+            }
+            if attack_until > 0:
+                d = durability_metrics(csv_path, attack_until)
+                rec["asr_at_stop"] = d["asr_at_stop"]
+                rec["retention"] = d["retention"]
+            records.append(rec)
+        except (FileNotFoundError, OSError):
+            # File is being written/moved right now; skip it this pass.
+            continue
     return records
 
 
