@@ -2,10 +2,12 @@ import {
   AGGREGATIONS,
   ATTACKS,
   FILE_REGEX,
+  LEGACY_FILE_REGEX,
   PARTITIONS,
   type Aggregation,
   type Attack,
   type ConfigKey,
+  type Dataset,
   type Partition,
 } from './constants';
 
@@ -18,34 +20,68 @@ export class ConfigParseError extends Error {
   }
 }
 
+function num(v: string | undefined): number | null {
+  if (v == null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function valid(agg: string, atk: string, part: string): boolean {
+  return (
+    AGGREGATIONS.includes(agg as Aggregation) &&
+    ATTACKS.includes(atk as Attack) &&
+    PARTITIONS.includes(part as Partition)
+  );
+}
+
 /**
  * Parse a benchmark CSV filename into its config dimensions.
- * Returns null on failure rather than throwing — callers can choose to skip.
- *
- * Filenames look like: `mean_lie_iid_m4.csv`, `multi_krum_model_replacement_noniid_m6.csv`.
+ * Supports the current scheme
+ *   `mnist_flame_geotox_noniid_a0.5_m4_u15_t0.9_s42.csv`
+ * and the legacy scheme
+ *   `mean_lie_iid_m4.csv`.
+ * Returns null on failure — callers may skip.
  */
 export function parseConfigName(filename: string): ConfigKey | null {
-  const match = filename.match(FILE_REGEX);
-  if (!match) return null;
-
-  const [, aggregation, attack, partition, malStr] = match;
-  const malicious = parseInt(malStr, 10);
-
-  if (
-    !AGGREGATIONS.includes(aggregation as Aggregation) ||
-    !ATTACKS.includes(attack as Attack) ||
-    !PARTITIONS.includes(partition as Partition) ||
-    !Number.isFinite(malicious)
-  ) {
-    return null;
+  const m = filename.match(FILE_REGEX);
+  if (m) {
+    const [, dataset, agg, atk, part, alpha, mal, until, tau, seed] = m;
+    if (!valid(agg, atk, part)) return null;
+    const malicious = parseInt(mal, 10);
+    if (!Number.isFinite(malicious)) return null;
+    return {
+      dataset: dataset as Dataset,
+      aggregation: agg as Aggregation,
+      attack: atk as Attack,
+      partition: part as Partition,
+      alpha: num(alpha),
+      malicious,
+      attackUntil: num(until) ?? 0,
+      tau: num(tau),
+      seed: num(seed),
+    };
   }
 
-  return {
-    aggregation: aggregation as Aggregation,
-    attack: attack as Attack,
-    partition: partition as Partition,
-    malicious,
-  };
+  const lm = filename.match(LEGACY_FILE_REGEX);
+  if (lm) {
+    const [, agg, atk, part, mal] = lm;
+    if (!valid(agg, atk, part)) return null;
+    const malicious = parseInt(mal, 10);
+    if (!Number.isFinite(malicious)) return null;
+    return {
+      dataset: 'mnist',
+      aggregation: agg as Aggregation,
+      attack: atk as Attack,
+      partition: part as Partition,
+      alpha: null,
+      malicious,
+      attackUntil: 0,
+      tau: null,
+      seed: null,
+    };
+  }
+
+  return null;
 }
 
 export function parseConfigNameOrThrow(filename: string): ConfigKey {
@@ -56,50 +92,79 @@ export function parseConfigNameOrThrow(filename: string): ConfigKey {
   return result;
 }
 
-/** Stable canonical key for indexing/dedup. */
+/** Stable canonical key for indexing/dedup (includes all dimensions). */
 export function configToKey(c: ConfigKey): string {
-  return `${c.aggregation}__${c.attack}__${c.partition}__m${c.malicious}`;
+  const a = c.alpha == null ? '' : `_a${c.alpha}`;
+  const u = c.attackUntil ? `_u${c.attackUntil}` : '';
+  const t = c.tau == null ? '' : `_t${c.tau}`;
+  const s = c.seed == null ? '' : `_s${c.seed}`;
+  return `${c.dataset}_${c.aggregation}_${c.attack}_${c.partition}${a}_m${c.malicious}${u}${t}${s}`;
 }
 
 export function configToFilename(c: ConfigKey): string {
-  return `${c.aggregation}_${c.attack}_${c.partition}_m${c.malicious}.csv`;
+  return `${configToKey(c)}.csv`;
 }
 
 // -----------------------------------------------------------------------------
-// Smoke test (run via `npx tsx src/lib/config-parser.ts` or the bundled test)
+// Smoke test
 // -----------------------------------------------------------------------------
 
-const SAMPLES: Array<[string, ConfigKey | null]> = [
-  ['mean_lie_iid_m2.csv', { aggregation: 'mean', attack: 'lie', partition: 'iid', malicious: 2 }],
+const SAMPLES: Array<[string, Partial<ConfigKey> | null]> = [
   [
-    'krum_model_replacement_noniid_m6.csv',
-    { aggregation: 'krum', attack: 'model_replacement', partition: 'noniid', malicious: 6 },
+    'mnist_krum_geotox_noniid_a0.5_m4_t0.9_s42.csv',
+    {
+      dataset: 'mnist',
+      aggregation: 'krum',
+      attack: 'geotox',
+      partition: 'noniid',
+      alpha: 0.5,
+      malicious: 4,
+      tau: 0.9,
+      seed: 42,
+      attackUntil: 0,
+    },
   ],
   [
-    'multi_krum_minmax_iid_m4.csv',
-    { aggregation: 'multi_krum', attack: 'minmax', partition: 'iid', malicious: 4 },
+    'mnist_flame_geotox_adaptive_noniid_a0.5_m4_u15_t0.0_s42.csv',
+    {
+      dataset: 'mnist',
+      aggregation: 'flame',
+      attack: 'geotox_adaptive',
+      partition: 'noniid',
+      alpha: 0.5,
+      malicious: 4,
+      attackUntil: 15,
+      tau: 0.0,
+      seed: 42,
+    },
   ],
   [
-    'bulyan_none_noniid_m2.csv',
-    { aggregation: 'bulyan', attack: 'none', partition: 'noniid', malicious: 2 },
+    'fashion_mnist_fltrust_none_iid_m0_s7.csv',
+    {
+      dataset: 'fashion_mnist',
+      aggregation: 'fltrust',
+      attack: 'none',
+      partition: 'iid',
+      malicious: 0,
+      seed: 7,
+    },
   ],
-  [
-    'fltrust_model_replacement_iid_m6.csv',
-    { aggregation: 'fltrust', attack: 'model_replacement', partition: 'iid', malicious: 6 },
-  ],
-  ['median_lie_iid_m2.csv', { aggregation: 'median', attack: 'lie', partition: 'iid', malicious: 2 }],
+  // Legacy
+  ['mean_lie_iid_m2.csv', { dataset: 'mnist', aggregation: 'mean', attack: 'lie', partition: 'iid', malicious: 2 }],
   // Negative cases
   ['experiment_summary.csv', null],
-  ['mean_lie_iid_m.csv', null],
-  ['mean_lie_xx_m2.csv', null],
-  ['unknown_lie_iid_m2.csv', null],
+  ['summary_by_config.csv', null],
+  ['mnist_mean_lie_iid_m.csv', null],
 ];
 
 export function runParserSmokeTest(log: (msg: string) => void = console.log): boolean {
   let allPass = true;
   for (const [name, expected] of SAMPLES) {
     const got = parseConfigName(name);
-    const pass = JSON.stringify(got) === JSON.stringify(expected);
+    const pass =
+      expected == null
+        ? got == null
+        : got != null && Object.entries(expected).every(([k, v]) => (got as unknown as Record<string, unknown>)[k] === v);
     if (!pass) allPass = false;
     log(`${pass ? '✓' : '✗'} ${name} → ${JSON.stringify(got)}`);
   }

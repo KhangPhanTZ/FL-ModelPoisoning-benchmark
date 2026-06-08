@@ -186,7 +186,7 @@ export function CurvesPage() {
         </FilterSection>
 
         <FilterSection title="Metric">
-          {(['accuracy', 'loss', 'asr'] as Metric[]).map((m) => (
+          {(['accuracy', 'loss', 'asr', 'evasion'] as Metric[]).map((m) => (
             <RadioOption
               key={m}
               value={m}
@@ -245,11 +245,20 @@ export function CurvesPage() {
           )}
         </div>
 
-        {filter.metric === 'asr' && filter.attacks.some((a) => a !== 'model_replacement') && (
+        {filter.metric === 'asr' &&
+          filter.attacks.some(
+            (a) => !['model_replacement', 'geotox', 'geotox_adaptive'].includes(a),
+          ) && (
+            <div className="text-xs text-slate-500 dark:text-slate-400 px-1">
+              Note: ASR is only meaningful for backdoor attacks (<strong>Model Replacement</strong>,{' '}
+              <strong>GeoTox</strong>, <strong>GeoTox-Adaptive</strong>). For other attacks the curve
+              reflects baseline trigger noise (≈ 1–3%) rather than a real backdoor success rate.
+            </div>
+          )}
+        {filter.metric === 'evasion' && (
           <div className="text-xs text-slate-500 dark:text-slate-400 px-1">
-            Note: ASR is only meaningful for the <strong>Model Replacement</strong> attack.
-            For other attacks the curve reflects baseline trigger noise (≈ 1–3%) rather than a
-            real backdoor success rate.
+            Evasion = % of malicious updates accepted (not filtered) by the defense each round.
+            Coordinate-wise defenses (Median, Trimmed-Mean) report 100% by convention.
           </div>
         )}
       </div>

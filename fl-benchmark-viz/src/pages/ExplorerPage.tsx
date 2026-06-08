@@ -19,7 +19,7 @@ import {
   type Partition,
 } from '../lib/constants';
 import { useAvailableDimensions, useExperiments } from '../hooks/useExperiments';
-import { configToFilename, configToKey } from '../lib/config-parser';
+import { configToFilename } from '../lib/config-parser';
 import { useUrlState } from '../lib/url-state';
 import { StatCard } from '../components/StatCard';
 import { ExportButton } from '../components/ExportButton';
@@ -44,23 +44,33 @@ const DEFAULT_PICK: ExplorerPick = {
   showAsr: false,
 };
 
+function coreKeyOf(a: string, att: string, p: string, m: number): string {
+  return `${a}__${att}__${p}__m${m}`;
+}
+
 export function ExplorerPage() {
-  const { experiments, byKey, loading } = useExperiments();
+  const { experiments, loading } = useExperiments();
   const dims = useAvailableDimensions();
   const [pick, setPick] = useUrlState<ExplorerPick>('e', DEFAULT_PICK);
+
+  // Map a (defense, attack, partition, malicious) tuple to the first matching
+  // experiment (the new data may have several seeds/taus per tuple).
+  const coreMap = useMemo(() => {
+    const map = new Map<string, Experiment>();
+    for (const e of experiments) {
+      const k = coreKeyOf(e.aggregation, e.attack, e.partition, e.malicious);
+      if (!map.has(k)) map.set(k, e);
+    }
+    return map;
+  }, [experiments]);
 
   // Auto-pick first available experiment if current pick has no data
   useEffect(() => {
     if (loading || experiments.length === 0) return;
     const candidate =
       pick.aggregation && pick.attack && pick.partition && pick.malicious !== ''
-        ? byKey.get(
-            configToKey({
-              aggregation: pick.aggregation as Aggregation,
-              attack: pick.attack as Attack,
-              partition: pick.partition as Partition,
-              malicious: Number(pick.malicious),
-            }),
+        ? coreMap.get(
+            coreKeyOf(pick.aggregation, pick.attack, pick.partition, Number(pick.malicious)),
           )
         : undefined;
     if (!candidate) {
@@ -83,31 +93,21 @@ export function ExplorerPage() {
       return null;
     }
     return (
-      byKey.get(
-        configToKey({
-          aggregation: pick.aggregation as Aggregation,
-          attack: pick.attack as Attack,
-          partition: pick.partition as Partition,
-          malicious: Number(pick.malicious),
-        }),
+      coreMap.get(
+        coreKeyOf(pick.aggregation, pick.attack, pick.partition, Number(pick.malicious)),
       ) ?? null
     );
-  }, [byKey, pick.aggregation, pick.attack, pick.partition, pick.malicious]);
+  }, [coreMap, pick.aggregation, pick.attack, pick.partition, pick.malicious]);
 
   // Determine which (att, part, mal) options are available given current aggregation, etc.
-  const validKeys = useMemo(() => new Set([...byKey.keys()]), [byKey]);
+  const validKeys = useMemo(() => new Set([...coreMap.keys()]), [coreMap]);
   const isOptionEnabled = (override: Partial<ExplorerPick>) => {
     const merged = { ...pick, ...override };
     if (!merged.aggregation || !merged.attack || !merged.partition || merged.malicious === '') {
       return false;
     }
     return validKeys.has(
-      configToKey({
-        aggregation: merged.aggregation as Aggregation,
-        attack: merged.attack as Attack,
-        partition: merged.partition as Partition,
-        malicious: Number(merged.malicious),
-      }),
+      coreKeyOf(merged.aggregation, merged.attack, merged.partition, Number(merged.malicious)),
     );
   };
 

@@ -3,6 +3,8 @@ import { Layout } from './components/Layout';
 import { DataProvider } from './context/DataContext';
 import { OverviewPage } from './pages/OverviewPage';
 import { CurvesPage } from './pages/CurvesPage';
+import { TradeoffPage } from './pages/TradeoffPage';
+import { TopologyPage } from './pages/TopologyPage';
 import { MatrixPage } from './pages/MatrixPage';
 import { AttacksPage } from './pages/AttacksPage';
 import { ExplorerPage } from './pages/ExplorerPage';
@@ -15,6 +17,8 @@ function App() {
           <Route element={<Layout />}>
             <Route index element={<OverviewPage />} />
             <Route path="curves" element={<CurvesPage />} />
+            <Route path="tradeoff" element={<TradeoffPage />} />
+            <Route path="topology" element={<TopologyPage />} />
             <Route path="matrix" element={<MatrixPage />} />
             <Route path="attacks" element={<AttacksPage />} />
             <Route path="explorer" element={<ExplorerPage />} />
