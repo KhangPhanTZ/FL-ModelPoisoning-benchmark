@@ -7,6 +7,7 @@ import {
   Search,
   ShieldAlert,
   Sun,
+  TrendingUp,
 } from 'lucide-react';
 import { useDarkMode } from '../hooks/useDarkMode';
 import { useExperiments } from '../hooks/useExperiments';
@@ -14,6 +15,7 @@ import { useExperiments } from '../hooks/useExperiments';
 const NAV = [
   { to: '/', label: 'Overview', icon: BarChart3, end: true },
   { to: '/curves', label: 'Training Curves', icon: LineChart, end: false },
+  { to: '/tradeoff', label: 'GeoTox Trade-off', icon: TrendingUp, end: false },
   { to: '/matrix', label: 'Defense × Attack', icon: Grid3x3, end: false },
   { to: '/attacks', label: 'Attacks', icon: ShieldAlert, end: false },
   { to: '/explorer', label: 'Explorer', icon: Search, end: false },

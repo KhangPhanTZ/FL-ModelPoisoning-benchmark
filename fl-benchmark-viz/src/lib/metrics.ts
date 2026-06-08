@@ -1,20 +1,25 @@
-import type { Attack, DerivedMetrics, RoundData } from './constants';
+import { BACKDOOR_ATTACKS, type Attack, type DerivedMetrics, type RoundData } from './constants';
 
 export function computeMetrics(rounds: RoundData[], attack: Attack): DerivedMetrics {
+  const asrIsMeaningful = BACKDOOR_ATTACKS.includes(attack);
+  const evasionIsMeaningful = attack !== 'none';
   if (rounds.length === 0) {
     return {
       finalAccuracy: 0,
       finalLoss: 0,
       finalAsr: 0,
+      finalEvasion: 0,
       maxAccuracy: 0,
       maxAccuracyRound: 0,
       minLoss: 0,
       minLossRound: 0,
       maxAsr: 0,
       maxAsrRound: 0,
+      maxEvasion: 0,
       convergenceRound: null,
       stabilityStd: 0,
-      asrIsMeaningful: attack === 'model_replacement',
+      asrIsMeaningful,
+      evasionIsMeaningful,
     };
   }
 
@@ -27,6 +32,7 @@ export function computeMetrics(rounds: RoundData[], attack: Attack): DerivedMetr
   let minLossRound = sorted[0].round;
   let maxAsr = -Infinity;
   let maxAsrRound = sorted[0].round;
+  let maxEvasion = -Infinity;
 
   for (const r of sorted) {
     if (r.accuracy > maxAccuracy) {
@@ -41,6 +47,7 @@ export function computeMetrics(rounds: RoundData[], attack: Attack): DerivedMetr
       maxAsr = r.asr;
       maxAsrRound = r.round;
     }
+    if (r.evasion > maxEvasion) maxEvasion = r.evasion;
   }
 
   // Convergence: first round where accuracy ≥ 90% of maxAccuracy
@@ -61,15 +68,18 @@ export function computeMetrics(rounds: RoundData[], attack: Attack): DerivedMetr
     finalAccuracy: last.accuracy,
     finalLoss: last.loss,
     finalAsr: last.asr,
+    finalEvasion: last.evasion,
     maxAccuracy,
     maxAccuracyRound,
     minLoss,
     minLossRound,
     maxAsr,
     maxAsrRound,
+    maxEvasion: maxEvasion === -Infinity ? 0 : maxEvasion,
     convergenceRound,
     stabilityStd,
-    asrIsMeaningful: attack === 'model_replacement',
+    asrIsMeaningful,
+    evasionIsMeaningful,
   };
 }
 

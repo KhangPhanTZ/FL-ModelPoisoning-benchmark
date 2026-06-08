@@ -41,27 +41,34 @@ async function loadOneExperiment(filename: string): Promise<RoundData[]> {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const text = await res.text();
   return new Promise<RoundData[]>((resolve, reject) => {
-    Papa.parse<RoundData>(text, {
+    Papa.parse<Record<string, unknown>>(text, {
       header: true,
       dynamicTyping: true,
       skipEmptyLines: true,
       complete: (results) => {
-        // Filter out any rows that don't have a numeric round (defensive)
-        const cleaned = results.data.filter(
-          (r): r is RoundData =>
-            r != null &&
-            typeof r.round === 'number' &&
-            typeof r.accuracy === 'number' &&
-            typeof r.loss === 'number',
-        );
+        const cleaned: RoundData[] = [];
+        for (const row of results.data) {
+          if (
+            row == null ||
+            typeof row.round !== 'number' ||
+            typeof row.accuracy !== 'number' ||
+            typeof row.loss !== 'number'
+          ) {
+            continue;
+          }
+          cleaned.push({
+            round: row.round,
+            loss: row.loss,
+            accuracy: row.accuracy,
+            asr: typeof row.asr === 'number' ? row.asr : 0,
+            // CSV column is `evasion_rate`; default 0 when absent/empty.
+            evasion: typeof row.evasion_rate === 'number' ? row.evasion_rate : 0,
+            timestamp: typeof row.timestamp === 'string' ? row.timestamp : '',
+          });
+        }
         if (cleaned.length === 0) {
           reject(new Error('no valid rows'));
           return;
-        }
-        // Ensure asr always present (default 0 if missing)
-        for (const row of cleaned) {
-          if (typeof row.asr !== 'number') row.asr = 0;
-          if (typeof row.timestamp !== 'string') row.timestamp = '';
         }
         cleaned.sort((a, b) => a.round - b.round);
         resolve(cleaned);

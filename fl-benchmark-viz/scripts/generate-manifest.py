@@ -16,12 +16,17 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 RESULTS_DIR = PROJECT_DIR / "public" / "results"
 
-# Mirror src/lib/constants.ts: longer alternatives first to avoid partial-match.
+# Mirror src/lib/constants.ts (longer alternatives first to avoid partial-match).
+_AGG = r"multi_krum|trimmed_mean|norm_clip|mean|median|krum|bulyan|fltrust|flame"
+_ATK = r"model_replacement|geotox_adaptive|geotox|none|lie|minmax"
+
+# Current scheme: {dataset}_{agg}_{attack}_{part}[_a..]_m..[_u..][_t..][_s..].csv
 FILE_PATTERN = re.compile(
-    r"^(multi_krum|mean|median|krum|bulyan|fltrust)"
-    r"_(model_replacement|none|lie|minmax)"
-    r"_(iid|noniid)_m(\d+)\.csv$"
+    rf"^(?:mnist|fashion_mnist)_(?:{_AGG})_(?:{_ATK})_(?:iid|noniid)"
+    rf"(?:_a[0-9.]+)?_m\d+(?:_u\d+)?(?:_t[0-9.]+)?(?:_s\d+)?\.csv$"
 )
+# Legacy scheme: {agg}_{attack}_{part}_m..csv
+LEGACY_PATTERN = re.compile(rf"^(?:{_AGG})_(?:{_ATK})_(?:iid|noniid)_m\d+\.csv$")
 
 
 def main() -> int:
@@ -34,7 +39,7 @@ def main() -> int:
     skipped: list[str] = []
     for csv in sorted(RESULTS_DIR.glob("*.csv")):
         name = csv.name
-        if FILE_PATTERN.match(name):
+        if FILE_PATTERN.match(name) or LEGACY_PATTERN.match(name):
             files.append(name)
         else:
             skipped.append(name)

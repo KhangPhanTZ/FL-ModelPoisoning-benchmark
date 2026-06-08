@@ -13,12 +13,13 @@ export interface ChartSeries {
   data: { round: number; value: number }[];
 }
 
-export type Metric = 'accuracy' | 'loss' | 'asr';
+export type Metric = 'accuracy' | 'loss' | 'asr' | 'evasion';
 
 export const METRIC_LABELS: Record<Metric, string> = {
   accuracy: 'Accuracy (%)',
   loss: 'Test loss',
   asr: 'ASR (%)',
+  evasion: 'Evasion (%)',
 };
 
 export function describeConfig(e: Experiment): string {
